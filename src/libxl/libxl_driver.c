@@ -4712,8 +4712,10 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
     }
 
     vm = virDomainFindByName(&driver->domains, dname);
-    if (!vm)
+    if (!vm) {
+        VIR_INFO("virDomainFindByName fail");
         goto cleanup;
+    }
 
     if (!cancelled) {
         if (!(flags & VIR_MIGRATE_PAUSED)) {
