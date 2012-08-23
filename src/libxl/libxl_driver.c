@@ -4254,6 +4254,7 @@ static int doParseURI(const char *uri, char **p_hostname, int *p_port)
     }
     *p_hostname = hostname;
     *p_port = port_nr;
+    VIR_INFO("uri: %s; hostname: %s; port: %d", uri, *p_hostname, *p_port);
     return 0;
 }
 
@@ -4703,10 +4704,13 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
     VIR_INFO("start");
     libxlDriverLock(driver);
 
-    if (doParseURI(uri, &hostname, &port))
+    if (doParseURI(uri, &hostname, &port)) {
         VIR_INFO("Fail to parse port from URI");
+        goto cleanup;
+    }
 
     if (LIBXL_MIGRATION_MIN_PORT <= port && port < LIBXL_MIGRATION_MAX_PORT) {
+        VIR_INFO(" ");
         if (virBitmapClearBit(driver->reservedMigPorts,
                               port - LIBXL_MIGRATION_MIN_PORT) < 0)
             VIR_INFO("Could not mark port %d as unused", port);
@@ -4734,14 +4738,16 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
                 goto error;
         }
 
+        VIR_INFO(" ");
         dom = virGetDomain(dconn, vm->def->name, vm->def->uuid);
-        VIR_INFO("goto cleanup");
+        VIR_INFO("goto cleanup with dom=%lx", (unsigned long)dom);
         goto cleanup;
     } else {
         VIR_INFO("cancelled");
     }
 
 error:
+    VIR_INFO(" ");
     if (libxlVmReap(driver, vm, 1, VIR_DOMAIN_SHUTOFF_SAVED)) {
         virReportError(VIR_ERR_INTERNAL_ERROR, 
                    _("Failed to destroy domain '%d'"), vm->def->id);
@@ -4751,13 +4757,17 @@ error:
                                      VIR_DOMAIN_EVENT_STOPPED_SAVED);
 
 cleanup:
+    VIR_INFO(" ");
     if (libxlMigrationJobFinish(driver, vm) == 0) {
+        VIR_INFO(" ");
         vm = NULL;
     } else if (!vm->persistent && !virDomainObjIsActive(vm)) {
+        VIR_INFO(" ");
         virDomainRemoveInactive(&driver->domains, vm);
         vm = NULL;
     }
 
+    VIR_INFO(" ");
     VIR_FREE(hostname);
     if (vm)
         virDomainObjUnlock(vm);
