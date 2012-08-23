@@ -4314,7 +4314,7 @@ cleanup:
     if (vm)
         virDomainObjUnlock(vm);
     libxlDriverUnlock(driver);
-    VIR_INFO("end");
+    VIR_INFO("end. ret=%lx", (unsigned long)xml);
     return xml;
 }
 
@@ -4354,7 +4354,7 @@ static void doMigrateReceive(void *opaque)
     libxlDriverUnlock(driver);
     VIR_INFO("vm start");
     ret = libxlVmStart(driver, vm, false, recv_fd);
-    VIR_INFO("vm start end");
+    VIR_INFO("vm start end. ret=%d", ret);
     libxlDriverLock(driver);
     virDomainObjLock(vm);
     if ( ret < 0) {
@@ -4446,7 +4446,7 @@ static int doMigrateSend(libxlDriverPrivatePtr driver, virDomainObjPtr vm, unsig
 cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
-    VIR_INFO("end");
+    VIR_INFO("end. ret=%d", ret);
     return ret;
 }
 
@@ -4599,7 +4599,7 @@ end:
         virDomainObjUnlock(vm);
     VIR_FREE(hostname);
     libxlDriverUnlock(driver);
-    VIR_INFO("end");
+    VIR_INFO("end. ret=%d", ret);
     return ret;
 }
 
@@ -4672,7 +4672,7 @@ cleanup:
     if (vm)
         virDomainObjUnlock(vm);
     libxlDriverUnlock(driver);
-    VIR_INFO("end");
+    VIR_INFO("end. ret=%d", ret);
     return ret;
 }
 
@@ -4763,7 +4763,7 @@ cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
     libxlDriverUnlock(driver);
-    VIR_INFO("end");
+    VIR_INFO("end. ret=%lx", (unsigned long)dom);
     return dom;
 }
 
@@ -4843,7 +4843,7 @@ cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
     libxlDriverUnlock(driver);
-    VIR_INFO("end");
+    VIR_INFO("end. ret=%d", ret);
     return ret;
 }
 
