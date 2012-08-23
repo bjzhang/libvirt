@@ -25,6 +25,22 @@
 
 # include <config.h>
 
+# define LIBXL_MIGRATION_FLAGS                   \
+    (VIR_MIGRATE_LIVE |                         \
+     VIR_MIGRATE_UNDEFINE_SOURCE |              \
+     VIR_MIGRATE_PAUSED)
+
+# define MAXCONN_NUM 10
+# define LIBXL_MIGRATION_MIN_PORT 49512
+# define LIBXL_MIGRATION_NUM_PORTS 64
+# define LIBXL_MIGRATION_MAX_PORT                \
+    (LIBXL_MIGRATION_MIN_PORT + LIBXL_MIGRATION_NUM_PORTS)
+
+static const char migrate_receiver_banner[]=
+    "xl migration receiver ready, send binary domain data";
+static const char migrate_receiver_ready[]=
+    "domain received, ready to unpause";
+
 int libxlRegister(void);
 
 #endif /* LIBXL_DRIVER_H */
