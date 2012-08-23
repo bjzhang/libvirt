@@ -4787,7 +4787,7 @@ libxlDomainMigrateConfirm3(virDomainPtr domain,
     }
 
     if (libxlVmReap(driver, vm, 1, VIR_DOMAIN_SHUTOFF_SAVED)) {
-        virReportError(VIR_ERR_INTERNAL_ERROR, "%s", 
+        virReportError(VIR_ERR_INTERNAL_ERROR, 
                    _("Failed to destroy domain '%d'"), vm->def->id);
         goto cleanup;
     }
