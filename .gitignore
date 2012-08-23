@@ -191,3 +191,8 @@ stamp-h1
 !/po/*.po
 !/po/POTFILES.in
 !/po/libvirt.pot
+
+log_*
+build.sh
+gnulib
+
