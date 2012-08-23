@@ -4723,12 +4723,15 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
     }
 
     if (!cancelled) {
+        VIR_INFO(" ");
         if (!(flags & VIR_MIGRATE_PAUSED)) {
+            VIR_INFO(" ");
             priv = vm->privateData;
             rc = libxl_domain_unpause(&priv->ctx, vm->def->id);
             if (rc) {
                 virReportError(VIR_ERR_OPERATION_FAILED, "%s", 
                            _("Failed to unpause domain"));
+                VIR_INFO("libxl_domain_unpause fail");
                 goto error;
             }
 
