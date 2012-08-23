@@ -4217,6 +4217,7 @@ static int doParseURI(const char *uri, char **p_hostname, int *p_port)
     char *p, *hostname;
     int port_nr = 0;
 
+    VIR_INFO("uri: %s; hostname: %s; port: %d", uri, *p_hostname, *p_port);
     if (uri == NULL)
         return -1;
 
@@ -4703,12 +4704,12 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
     libxlDriverLock(driver);
 
     if (doParseURI(uri, &hostname, &port))
-        VIR_DEBUG("Fail to parse port from URI");
+        VIR_INFO("Fail to parse port from URI");
 
     if (LIBXL_MIGRATION_MIN_PORT <= port && port < LIBXL_MIGRATION_MAX_PORT) {
         if (virBitmapClearBit(driver->reservedMigPorts,
                               port - LIBXL_MIGRATION_MIN_PORT) < 0)
-            VIR_DEBUG("Could not mark port %d as unused", port);
+            VIR_INFO("Could not mark port %d as unused", port);
     }
 
     vm = virDomainFindByName(&driver->domains, dname);
