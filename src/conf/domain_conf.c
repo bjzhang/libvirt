@@ -13497,6 +13497,7 @@ int virDomainSaveStatus(virCapsPtr caps,
     ret = 0;
 cleanup:
     VIR_FREE(xml);
+    VIR_INFO("exit with %d", ret);
     return ret;
 }
 

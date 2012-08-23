@@ -4203,9 +4203,12 @@ static int libxlCheckMessageBanner(int fd, const char *banner, int banner_sz)
         ret = saferead(fd, buf, banner_sz);
     } while ( -1 == ret && EAGAIN == errno );
 
-    if ( ret != banner_sz || memcmp(buf, banner, banner_sz) ) 
+    if ( ret != banner_sz || memcmp(buf, banner, banner_sz) ) {
+        VIR_INFO("failed");
         return -1;
+    }
 
+    VIR_INFO("successful");
     return 0;
 }
 
@@ -4270,6 +4273,8 @@ libxlDomainMigrateBegin3(virDomainPtr domain,
 
     virCheckFlags(LIBXL_MIGRATION_FLAGS, NULL);
 
+    VIR_INFO("start");
+
     libxlDriverLock(driver);
     vm = virDomainFindByUUID(&driver->domains, domain->uuid);
     if (!vm) {
@@ -4309,6 +4314,7 @@ cleanup:
     if (vm)
         virDomainObjUnlock(vm);
     libxlDriverUnlock(driver);
+    VIR_INFO("end");
     return xml;
 }
 
@@ -4325,6 +4331,7 @@ static void doMigrateReceive(void *opaque)
     int len;
     int ret = -1;
 
+    VIR_INFO("start");
     do {
         recv_fd = accept(sockfd, (struct sockaddr *)&new_addr, &socklen);
     } while(recv_fd < 0 && errno == EINTR);
@@ -4345,7 +4352,9 @@ static void doMigrateReceive(void *opaque)
 
     virDomainObjUnlock(vm);
     libxlDriverUnlock(driver);
+    VIR_INFO("vm start");
     ret = libxlVmStart(driver, vm, false, recv_fd);
+    VIR_INFO("vm start end");
     libxlDriverLock(driver);
     virDomainObjLock(vm);
     if ( ret < 0) {
@@ -4373,6 +4382,7 @@ cleanup:
         virDomainObjUnlock(vm);
     VIR_FREE(opaque);
     libxlDriverUnlock(driver);
+    VIR_INFO("end");
     return;
 }
 
@@ -4384,6 +4394,7 @@ static int doMigrateSend(libxlDriverPrivatePtr driver, virDomainObjPtr vm, unsig
     int live = 0;
     int ret = -1;
 
+    VIR_INFO("start");
     if (flags & VIR_MIGRATE_LIVE)
         live = 1;
 
@@ -4435,6 +4446,7 @@ static int doMigrateSend(libxlDriverPrivatePtr driver, virDomainObjPtr vm, unsig
 cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
+    VIR_INFO("end");
     return ret;
 }
 
@@ -4464,6 +4476,7 @@ libxlDomainMigratePrepare3(virConnectPtr dconn,
 
     virCheckFlags(LIBXL_MIGRATION_FLAGS, -1);
 
+    VIR_INFO("start");
     libxlDriverLock(driver);
     if (!dom_xml) {
         virReportError(VIR_ERR_OPERATION_INVALID, "%s", 
@@ -4586,6 +4599,7 @@ end:
         virDomainObjUnlock(vm);
     VIR_FREE(hostname);
     libxlDriverUnlock(driver);
+    VIR_INFO("end");
     return ret;
 }
 
@@ -4613,6 +4627,7 @@ libxlDomainMigratePerform3(virDomainPtr dom,
 
     virCheckFlags(LIBXL_MIGRATION_FLAGS, -1);
 
+    VIR_INFO("start");
     libxlDriverLock(driver);
     vm = virDomainFindByUUID(&driver->domains, dom->uuid);
     if (!vm) {
@@ -4623,8 +4638,10 @@ libxlDomainMigratePerform3(virDomainPtr dom,
         goto cleanup;
     }
 
-    if (doParseURI(uri, &hostname, &port))
+    if (doParseURI(uri, &hostname, &port)) {
+        VIR_INFO("doParseURI");
         goto cleanup;
+    }
 
     VIR_DEBUG("hostname = %s, port = %d", hostname, port);
 
@@ -4655,6 +4672,7 @@ cleanup:
     if (vm)
         virDomainObjUnlock(vm);
     libxlDriverUnlock(driver);
+    VIR_INFO("end");
     return ret;
 }
 
@@ -4681,6 +4699,7 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
 
     virCheckFlags(LIBXL_MIGRATION_FLAGS, NULL);
 
+    VIR_INFO("start");
     libxlDriverLock(driver);
 
     if (doParseURI(uri, &hostname, &port))
@@ -4713,7 +4732,10 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
         }
 
         dom = virGetDomain(dconn, vm->def->name, vm->def->uuid);
+        VIR_INFO("goto cleanup");
         goto cleanup;
+    } else {
+        VIR_INFO("cancelled");
     }
 
 error:
@@ -4739,6 +4761,7 @@ cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
     libxlDriverUnlock(driver);
+    VIR_INFO("end");
     return dom;
 }
 
@@ -4757,6 +4780,7 @@ libxlDomainMigrateConfirm3(virDomainPtr domain,
 
     virCheckFlags(LIBXL_MIGRATION_FLAGS, -1);
 
+    VIR_INFO("start");
     libxlDriverLock(driver);
     vm = virDomainFindByUUID(&driver->domains, domain->uuid);
     if (!vm) {
@@ -4774,15 +4798,18 @@ libxlDomainMigrateConfirm3(virDomainPtr domain,
         if (!libxl_domain_resume(&priv->ctx, vm->def->id)) {
             ret = 0;
         } else {
-            VIR_DEBUG("Failed to resume domain '%d' with libxenlight",
+            VIR_INFO("Failed to resume domain '%d' with libxenlight",
                       vm->def->id);
             virDomainObjSetState(vm, VIR_DOMAIN_PAUSED, VIR_DOMAIN_PAUSED_MIGRATION);
             event = virDomainEventNewFromObj(vm, VIR_DOMAIN_EVENT_SUSPENDED,
                                              VIR_DOMAIN_EVENT_SUSPENDED_MIGRATED);
-            if (virDomainSaveStatus(driver->caps, driver->stateDir, vm) < 0)
+            if (virDomainSaveStatus(driver->caps, driver->stateDir, vm) < 0) { 
+                VIR_INFO("virDomainSaveStatus failed");
                 goto cleanup;
+            }
         }
 
+        VIR_INFO("goto cleanup");
         goto cleanup;
     }
 
@@ -4814,6 +4841,7 @@ cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
     libxlDriverUnlock(driver);
+    VIR_INFO("end");
     return ret;
 }
 
