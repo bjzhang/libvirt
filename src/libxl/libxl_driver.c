@@ -4731,7 +4731,7 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
             if (rc) {
                 virReportError(VIR_ERR_OPERATION_FAILED, "%s", 
                            _("Failed to unpause domain"));
-                VIR_INFO("libxl_domain_unpause fail");
+                VIR_INFO("libxl_domain_unpause fail. rc=%d", rc);
                 goto error;
             }
 
