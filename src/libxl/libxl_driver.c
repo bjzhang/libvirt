@@ -4710,7 +4710,6 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
     }
 
     if (LIBXL_MIGRATION_MIN_PORT <= port && port < LIBXL_MIGRATION_MAX_PORT) {
-        VIR_INFO(" ");
         if (virBitmapClearBit(driver->reservedMigPorts,
                               port - LIBXL_MIGRATION_MIN_PORT) < 0)
             VIR_INFO("Could not mark port %d as unused", port);
@@ -4723,10 +4722,10 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
     }
 
     if (!cancelled) {
-        VIR_INFO(" ");
+        VIR_INFO("not cancelled");
         if (!(flags & VIR_MIGRATE_PAUSED)) {
-            VIR_INFO(" ");
             priv = vm->privateData;
+            VIR_INFO("libxl_domain_unpause ctx: %lx, id: %d", (unsigned long)&priv->ctx, vm->def->id);
             rc = libxl_domain_unpause(&priv->ctx, vm->def->id);
             if (rc) {
                 virReportError(VIR_ERR_OPERATION_FAILED, "%s", 
@@ -4736,12 +4735,12 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
             }
 
             virDomainObjSetState(vm, VIR_DOMAIN_RUNNING, VIR_DOMAIN_RUNNING_BOOTED);
-            if (virDomainSaveStatus(driver->caps, driver->stateDir, vm) < 0)
+            if (virDomainSaveStatus(driver->caps, driver->stateDir, vm) < 0) {
                 VIR_WARN("Failed to save status on vm %s", vm->def->name);
                 goto error;
+            }
         }
 
-        VIR_INFO(" ");
         dom = virGetDomain(dconn, vm->def->name, vm->def->uuid);
         VIR_INFO("goto cleanup with dom=%lx", (unsigned long)dom);
         goto cleanup;
@@ -4750,7 +4749,7 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
     }
 
 error:
-    VIR_INFO(" ");
+    VIR_INFO("error handling");
     if (libxlVmReap(driver, vm, 1, VIR_DOMAIN_SHUTOFF_SAVED)) {
         virReportError(VIR_ERR_INTERNAL_ERROR, 
                    _("Failed to destroy domain '%d'"), vm->def->id);
@@ -4760,17 +4759,17 @@ error:
                                      VIR_DOMAIN_EVENT_STOPPED_SAVED);
 
 cleanup:
-    VIR_INFO(" ");
+    VIR_INFO("cleanup handling");
     if (libxlMigrationJobFinish(driver, vm) == 0) {
-        VIR_INFO(" ");
+        VIR_INFO("libxlMigrationJobFinish with reference count 0");
         vm = NULL;
     } else if (!vm->persistent && !virDomainObjIsActive(vm)) {
-        VIR_INFO(" ");
+        VIR_INFO("virDomainRemoveInactive domain: %lx, vm: %lx", (unsigned long)&driver->domains, (unsigned long)vm);
         virDomainRemoveInactive(&driver->domains, vm);
         vm = NULL;
     }
 
-    VIR_INFO(" ");
+    VIR_INFO("free hostname");
     VIR_FREE(hostname);
     if (vm)
         virDomainObjUnlock(vm);
