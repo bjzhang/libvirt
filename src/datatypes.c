@@ -175,6 +175,7 @@ virGetDomain(virConnectPtr conn, const char *name, const unsigned char *uuid)
 {
     virDomainPtr ret = NULL;
 
+    VIR_INFO("conn: %lx; name: %s; uuid: %s", (unsigned long)conn, name, (char*)uuid);
     if (virDataTypesInitialize() < 0)
         return NULL;
 
