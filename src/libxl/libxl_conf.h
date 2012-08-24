@@ -97,7 +97,6 @@ enum libxlDomainJob {
 
     /* The following two items must always be the last items before JOB_LAST */
     LIBXL_JOB_ASYNC,         /* Asynchronous job */
-    LIBXL_JOB_ASYNC_NESTED,  /* Normal job within an async job */
 
     LIBXL_JOB_LAST
 };

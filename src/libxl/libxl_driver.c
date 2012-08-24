@@ -106,7 +106,6 @@ VIR_ENUM_IMPL(libxlDomainJob, LIBXL_JOB_LAST,
               "abort",
               "migration operation",
               "none",   /* async job is never stored in job.active */
-              "async nested",
 );
 
 VIR_ENUM_IMPL(libxlDomainAsyncJob, LIBXL_ASYNC_JOB_LAST,
@@ -217,7 +216,6 @@ libxlDomainObjBeginJobInternal(libxlDriverPrivatePtr driver,
     libxlDomainObjPrivatePtr priv = obj->privateData;
     unsigned long long now;
     unsigned long long then;
-    bool nested = job == LIBXL_JOB_ASYNC_NESTED;
 
     priv->jobs_queued++;
 
@@ -236,7 +234,7 @@ retry:
         goto error;
     }
 
-    while (!nested && !libxlDomainNestedJobAllowed(priv, job)) {
+    while (!libxlDomainNestedJobAllowed(priv, job)) {
         VIR_INFO("Wait async job condition for starting job: %s (async=%s)",
                    libxlDomainJobTypeToString(job),
                    libxlDomainAsyncJobTypeToString(priv->job.asyncJob));
@@ -254,7 +252,7 @@ retry:
 
     /* No job is active but a new async job could have been started while obj
      * was unlocked, so we need to recheck it. */
-    if (!nested && !libxlDomainNestedJobAllowed(priv, job))
+    if (!libxlDomainNestedJobAllowed(priv, job))
         goto retry;
 
     libxlDomainObjResetJob(priv);
@@ -4281,7 +4279,7 @@ libxlDomainAbortJob(virDomainPtr dom)
     if (!vm) {
         char uuidstr[VIR_UUID_STRING_BUFLEN];
         virUUIDFormat(dom->uuid, uuidstr);
-        virReportError(VIR_ERR_NO_DOMAIN, 
+        virReportError(VIR_ERR_NO_DOMAIN,
                         _("no domain with matching uuid '%s'"), uuidstr);
         goto cleanup;
     }
