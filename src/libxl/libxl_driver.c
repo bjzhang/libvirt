@@ -101,9 +101,7 @@ libxlDriverUnlock(libxlDriverPrivatePtr driver)
 /* job */
 VIR_ENUM_IMPL(libxlDomainJob, LIBXL_JOB_LAST,
               "none",
-              "query",
               "destroy",
-              "suspend",
               "modify",
               "abort",
               "migration operation",
@@ -116,6 +114,7 @@ VIR_ENUM_IMPL(libxlDomainAsyncJob, LIBXL_ASYNC_JOB_LAST,
               "migration out",
               "migration in",
               "save",
+              "restore",
               "dump",
 );
 
@@ -238,11 +237,17 @@ retry:
     }
 
     while (!nested && !libxlDomainNestedJobAllowed(priv, job)) {
+        VIR_INFO("Wait async job condition for starting job: %s (async=%s)",
+                   libxlDomainJobTypeToString(job),
+                   libxlDomainAsyncJobTypeToString(priv->job.asyncJob));
         if (virCondWaitUntil(&priv->job.asyncCond, &obj->lock, then) < 0)
             goto error;
     }
 
     while (priv->job.active) {
+        VIR_INFO("Wait normal job condition for starting job: %s (async=%s)",
+                   libxlDomainJobTypeToString(job),
+                   libxlDomainAsyncJobTypeToString(priv->job.asyncJob));
         if (virCondWaitUntil(&priv->job.cond, &obj->lock, then) < 0)
             goto error;
     }
@@ -278,7 +283,6 @@ retry:
     if (libxlDomainTrackJob(job))
         libxlDomainObjSaveJob(driver, obj);
 
-
     return 0;
 
 error:
@@ -312,6 +316,58 @@ error:
     return -1;
 }
 
+/*
+ * obj must be locked before calling, libxlDriverPrivatePtr must NOT be locked
+ *
+ * This must be called by anything that will change the VM state
+ * in any way, or anything that will use the LIBXL monitor.
+ *
+ * Upon successful return, the object will have its ref count increased,
+ * successful calls must be followed by EndJob eventually
+ */
+static int
+libxlDomainObjBeginJob(libxlDriverPrivatePtr driver,
+                          virDomainObjPtr obj,
+                          enum libxlDomainJob job)
+{
+    return libxlDomainObjBeginJobInternal(driver, false, obj, job,
+                                         LIBXL_ASYNC_JOB_NONE);
+}
+
+static int ATTRIBUTE_UNUSED 
+libxlDomainObjBeginAsyncJob(libxlDriverPrivatePtr driver,
+                               virDomainObjPtr obj,
+                               enum libxlDomainAsyncJob asyncJob)
+{
+    return libxlDomainObjBeginJobInternal(driver, false, obj, LIBXL_JOB_ASYNC,
+                                         asyncJob);
+}
+
+/*
+ * obj must be locked before calling. If libxlDriverPrivatePtr is passed, it 
+ * MUST be locked; otherwise it MUST NOT be locked.
+ *
+ * This must be called by anything that will change the VM state
+ * in any way, or anything that will use the LIBXL monitor.
+ *
+ * Upon successful return, the object will have its ref count increased,
+ * successful calls must be followed by EndJob eventually
+ */
+static int ATTRIBUTE_UNUSED 
+libxlDomainObjBeginJobWithDriver(libxlDriverPrivatePtr driver,
+                                    virDomainObjPtr obj,
+                                    enum libxlDomainJob job)
+{
+    if (job <= LIBXL_JOB_NONE || job >= LIBXL_JOB_ASYNC) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                        _("Attempt to start invalid job"));
+        return -1;
+    }
+
+    return libxlDomainObjBeginJobInternal(driver, true, obj, job,
+                                         LIBXL_ASYNC_JOB_NONE);
+}
+
 static int
 libxlDomainObjBeginAsyncJobWithDriver(libxlDriverPrivatePtr driver,
                                          virDomainObjPtr obj,
@@ -319,6 +375,35 @@ libxlDomainObjBeginAsyncJobWithDriver(libxlDriverPrivatePtr driver,
 {
     return libxlDomainObjBeginJobInternal(driver, true, obj, LIBXL_JOB_ASYNC,
                                          asyncJob);
+}
+
+/*
+ * obj must be locked before calling, libxlDriverPrivatePtr does not matter
+ *
+ * To be called after completing the work associated with the
+ * earlier libxlDomainBeginJob() call
+ *
+ * Returns remaining refcount on 'obj', maybe 0 to indicated it
+ * was deleted
+ */
+static bool
+libxlDomainObjEndJob(libxlDriverPrivatePtr driver, virDomainObjPtr obj)
+{
+    libxlDomainObjPrivatePtr priv = obj->privateData;
+    enum libxlDomainJob job = priv->job.active;
+
+    priv->jobs_queued--;
+
+    VIR_DEBUG("Stopping job: %s (async=%s)",
+              libxlDomainJobTypeToString(job),
+              libxlDomainAsyncJobTypeToString(priv->job.asyncJob));
+
+    libxlDomainObjResetJob(priv);
+    if (libxlDomainTrackJob(job))
+        libxlDomainObjSaveJob(driver, obj);
+    virCondSignal(&priv->job.cond);
+
+    return virObjectUnref(obj);
 }
 
 static bool
@@ -348,13 +433,8 @@ libxlMigrationJobStart(libxlDriverPrivatePtr driver,
     if (libxlDomainObjBeginAsyncJobWithDriver(driver, vm, job) < 0)
         return -1;
 
-    if (job == LIBXL_ASYNC_JOB_MIGRATION_IN) {
-        libxlDomainObjSetAsyncJobMask(vm, LIBXL_JOB_NONE);
-    } else {
-        libxlDomainObjSetAsyncJobMask(vm, DEFAULT_JOB_MASK |
-                                     JOB_MASK(LIBXL_JOB_SUSPEND) |
-                                     JOB_MASK(LIBXL_JOB_MIGRATION_OP));
-    }
+    libxlDomainObjSetAsyncJobMask(vm, DEFAULT_JOB_MASK |
+                                 JOB_MASK(LIBXL_JOB_MIGRATION_OP));
 
     priv->job.info.type = VIR_DOMAIN_JOB_UNBOUNDED;
 
@@ -4134,6 +4214,119 @@ cleanup:
     return ret;
 }
 
+static int ATTRIBUTE_UNUSED 
+libxlDomainGetJobInfo(virDomainPtr dom,
+                      virDomainJobInfoPtr info)
+{
+    libxlDriverPrivatePtr driver = dom->conn->privateData;
+    virDomainObjPtr vm;
+    int ret = -1;
+    libxlDomainObjPrivatePtr priv;
+
+    libxlDriverLock(driver);
+    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    libxlDriverUnlock(driver);
+    if (!vm) {
+        char uuidstr[VIR_UUID_STRING_BUFLEN];
+        virUUIDFormat(dom->uuid, uuidstr);
+        virReportError(VIR_ERR_NO_DOMAIN, 
+                        _("no domain with matching uuid '%s'"), uuidstr);
+        goto cleanup;
+    }
+
+    priv = vm->privateData;
+
+    if (virDomainObjIsActive(vm)) {
+        if (priv->job.asyncJob) {
+            memcpy(info, &priv->job.info, sizeof(*info));
+
+            /* Refresh elapsed time again just to ensure it
+             * is fully updated. This is primarily for benefit
+             * of incoming migration which we don't currently
+             * monitor actively in the background thread
+             */
+            if (virTimeMillisNow(&info->timeElapsed) < 0)
+                goto cleanup;
+            info->timeElapsed -= priv->job.start;
+        } else {
+            memset(info, 0, sizeof(*info));
+            info->type = VIR_DOMAIN_JOB_NONE;
+        }
+    } else {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                        "%s", _("domain is not running"));
+        goto cleanup;
+    }
+
+    ret = 0;
+
+cleanup:
+    if (vm)
+        virDomainObjUnlock(vm);
+    return ret;
+}
+
+
+static int ATTRIBUTE_UNUSED 
+libxlDomainAbortJob(virDomainPtr dom)
+{
+    libxlDriverPrivatePtr driver = dom->conn->privateData;
+    virDomainObjPtr vm;
+    int ret = -1;
+    libxlDomainObjPrivatePtr priv;
+
+    libxlDriverLock(driver);
+    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    libxlDriverUnlock(driver);
+    if (!vm) {
+        char uuidstr[VIR_UUID_STRING_BUFLEN];
+        virUUIDFormat(dom->uuid, uuidstr);
+        virReportError(VIR_ERR_NO_DOMAIN, 
+                        _("no domain with matching uuid '%s'"), uuidstr);
+        goto cleanup;
+    }
+
+    if (libxlDomainObjBeginJob(driver, vm, LIBXL_JOB_ABORT) < 0)
+        goto cleanup;
+
+    if (!virDomainObjIsActive(vm)) {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                        "%s", _("domain is not running"));
+        goto endjob;
+    }
+
+    priv = vm->privateData;
+
+    if (!priv->job.asyncJob) {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                        "%s", _("no job is active on the domain"));
+        goto endjob;
+    } else if (priv->job.asyncJob == LIBXL_ASYNC_JOB_MIGRATION_IN) {
+        virReportError(VIR_ERR_OPERATION_INVALID, "%s",
+                        _("cannot abort incoming migration;"
+                          " use virDomainDestroy instead"));
+        goto endjob;
+    } else if (priv->job.asyncJob == LIBXL_ASYNC_JOB_DUMP) {
+        virReportError(VIR_ERR_OPERATION_INVALID, "%s",
+                        _("cannot abort core dump;"
+                          " use virDomainDestroy instead"));
+        goto endjob;
+    }
+
+    VIR_DEBUG("Cancelling job at client request");
+    // \TODO 
+
+endjob:
+    if (libxlDomainObjEndJob(driver, vm) == 0)
+        vm = NULL;
+
+cleanup:
+    if (vm)
+        virDomainObjUnlock(vm);
+    return ret;
+}
+
+
 static int
 libxlDomainEventRegisterAny(virConnectPtr conn, virDomainPtr dom, int eventID,
                             virConnectDomainEventGenericCallback callback,
@@ -4939,6 +5132,8 @@ static virDriver libxlDriver = {
     .domainIsActive = libxlDomainIsActive, /* 0.9.0 */
     .domainIsPersistent = libxlDomainIsPersistent, /* 0.9.0 */
     .domainIsUpdated = libxlDomainIsUpdated, /* 0.9.0 */
+//    .domainGetJobInfo = libxlDomainGetJobInfo, /* 0.9.11 */
+//    .domainAbortJob = libxlDomainAbortJob, /* 0.9.11 */
     .domainEventRegisterAny = libxlDomainEventRegisterAny, /* 0.9.0 */
     .domainEventDeregisterAny = libxlDomainEventDeregisterAny, /* 0.9.0 */
     .isAlive = libxlIsAlive, /* 0.9.8 */

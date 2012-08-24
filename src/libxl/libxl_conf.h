@@ -76,9 +76,8 @@ struct _libxlDriverPrivate {
 };
 
 # define JOB_MASK(job)                  (1 << (job - 1))
-# define DEFAULT_JOB_MASK               \
-    (JOB_MASK(LIBXL_JOB_QUERY) |         \
-     JOB_MASK(LIBXL_JOB_DESTROY) |       \
+# define DEFAULT_JOB_MASK                \
+    (JOB_MASK(LIBXL_JOB_DESTROY) |       \
      JOB_MASK(LIBXL_JOB_ABORT))
 
 /* Jobs which have to be tracked in domain state XML. */
@@ -90,10 +89,8 @@ struct _libxlDriverPrivate {
  * A job includes *all* libxl.so api, even those just querying
  * information, not merely actions */
 enum libxlDomainJob {
-    LIBXL_JOB_NONE = 0,  /* Always set to 0 for easy if (jobActive) conditions */
-    LIBXL_JOB_QUERY,         /* Doesn't change any state */
+    LIBXL_JOB_NONE = 0,      /* Always set to 0 for easy if (jobActive) conditions */
     LIBXL_JOB_DESTROY,       /* Destroys the domain (cannot be masked out) */
-    LIBXL_JOB_SUSPEND,       /* Suspends (stops vCPUs) the domain */
     LIBXL_JOB_MODIFY,        /* May change state */
     LIBXL_JOB_ABORT,         /* Abort current async job */
     LIBXL_JOB_MIGRATION_OP,  /* Operation influencing outgoing migration */
@@ -115,6 +112,7 @@ enum libxlDomainAsyncJob {
     LIBXL_ASYNC_JOB_MIGRATION_OUT,
     LIBXL_ASYNC_JOB_MIGRATION_IN,
     LIBXL_ASYNC_JOB_SAVE,
+    LIBXL_ASYNC_JOB_RESTORE,
     LIBXL_ASYNC_JOB_DUMP,
 
     LIBXL_ASYNC_JOB_LAST
