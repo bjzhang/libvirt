@@ -61,6 +61,7 @@ struct _libxlDriverPrivate {
     libxl_ctx ctx;
 
     virBitmapPtr reservedVNCPorts;
+    virBitmapPtr reservedMigPorts; /* reserved migration ports */
     virDomainObjList domains;
 
     virDomainEventStatePtr domainEventState;
@@ -171,5 +172,7 @@ libxlMakeVfb(libxlDriverPrivatePtr driver, virDomainDefPtr def,
 int
 libxlBuildDomainConfig(libxlDriverPrivatePtr driver,
                        virDomainDefPtr def, libxl_domain_config *d_config);
+int
+libxlNextFreePort(virBitmapPtr bitmap, int startPort, int numPorts);
 
 #endif /* LIBXL_CONF_H */
