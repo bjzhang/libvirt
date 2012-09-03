@@ -191,3 +191,7 @@ stamp-h1
 !/po/*.po
 !/po/POTFILES.in
 !/po/libvirt.pot
+
+log*
+patch*
+*.swp
