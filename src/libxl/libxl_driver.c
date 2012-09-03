@@ -354,8 +354,8 @@ libxlDomainObjBeginJobWithDriver(libxlDriverPrivatePtr driver,
     return libxlDomainObjBeginJobInternal(driver, true, obj, job,
                                          LIBXL_ASYNC_JOB_NONE);
 }
-/*
-static int
+
+static int ATTRIBUTE_UNUSED
 libxlDomainObjBeginAsyncJobWithDriver(libxlDriverPrivatePtr driver,
                                          virDomainObjPtr obj,
                                          enum libxlDomainAsyncJob asyncJob)
@@ -363,7 +363,6 @@ libxlDomainObjBeginAsyncJobWithDriver(libxlDriverPrivatePtr driver,
     return libxlDomainObjBeginJobInternal(driver, true, obj, LIBXL_JOB_ASYNC,
                                          asyncJob);
 }
-*/
 
 /*
  * obj must be locked before calling, libxlDriverPrivatePtr does not matter
@@ -407,7 +406,7 @@ libxlDomainObjEndAsyncJob(libxlDriverPrivatePtr driver, virDomainObjPtr obj)
     return virObjectUnref(obj);
 }
 
-static int
+static int ATTRIBUTE_UNUSED
 libxlMigrationJobStart(libxlDriverPrivatePtr driver,
                        virDomainObjPtr vm,
                        enum libxlDomainAsyncJob job)
@@ -425,7 +424,7 @@ libxlMigrationJobStart(libxlDriverPrivatePtr driver,
     return 0;
 }
 
-static bool
+static bool ATTRIBUTE_UNUSED
 libxlMigrationJobFinish(libxlDriverPrivatePtr driver, virDomainObjPtr vm)
 {
     return libxlDomainObjEndAsyncJob(driver, vm);
