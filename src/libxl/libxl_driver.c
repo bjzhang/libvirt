@@ -1934,7 +1934,7 @@ libxlDomainDestroyFlags(virDomainPtr dom,
     }
 
     if (!vm->persistent) {
-        if (libxlDomainObjEndJob(driver, vm)) 
+        if (libxlDomainObjEndJob(driver, vm))
             virDomainRemoveInactive(&driver->domains, vm);
         vm = NULL;
     }
@@ -2274,7 +2274,7 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     ret = libxl_domain_suspend(&priv->ctx, NULL, vm->def->id, fd);
     libxlDriverLock(driver);
     virDomainObjLock(vm);
- 
+
     if (ret != 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Failed to save domain '%d' with libxenlight"),
@@ -2397,7 +2397,7 @@ libxlDomainRestoreFlags(virConnectPtr conn, const char *from,
 
     if ((ret = libxlVmStart(driver, vm, false, fd)) < 0 &&
         !vm->persistent) {
-        if (libxlDomainObjEndAsyncJob(driver, vm)) 
+        if (libxlDomainObjEndAsyncJob(driver, vm))
             virDomainRemoveInactive(&driver->domains, vm);
         vm = NULL;
     }
@@ -3167,7 +3167,7 @@ libxlDomainCreateWithFlags(virDomainPtr dom,
 endjob:
     if (!libxlDomainObjEndJob(driver, vm))
         vm = NULL;
- 
+
 cleanup:
     if (vm)
         virDomainObjUnlock(vm);
