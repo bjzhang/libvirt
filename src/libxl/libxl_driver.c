@@ -82,12 +82,6 @@ typedef struct migrate_receive_args {
     int sockfd;
 } migrate_receive_args;
 
-typedef struct migrate_receive_args {
-    virConnectPtr conn;
-    virDomainObjPtr vm;
-    int sockfd;
-} migrate_receive_args;
-
 /* Function declarations */
 static int
 libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
@@ -4986,14 +4980,14 @@ libxlDomainMigrateConfirm3(virDomainPtr domain,
     if (!vm) {
         char uuidstr[VIR_UUID_STRING_BUFLEN];
         virUUIDFormat(domain->uuid, uuidstr);
-        virReportError(VIR_ERR_NO_DOMAIN, 
+        virReportError(VIR_ERR_NO_DOMAIN,
                    _("no domain with matching uuid '%s'"), uuidstr);
         goto cleanup;
     }
 
     if (cancelled) {
         priv = vm->privateData;
-        virReportError(VIR_ERR_INTERNAL_ERROR,
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                    _("migration failed, try to resume on our end"));
         if (!libxl_domain_resume(&priv->ctx, vm->def->id)) {
             ret = 0;
@@ -5011,7 +5005,7 @@ libxlDomainMigrateConfirm3(virDomainPtr domain,
     }
 
     if (libxlVmReap(driver, vm, 1, VIR_DOMAIN_SHUTOFF_SAVED)) {
-        virReportError(VIR_ERR_INTERNAL_ERROR, 
+        virReportError(VIR_ERR_INTERNAL_ERROR,
                    _("Failed to destroy domain '%d'"), vm->def->id);
         goto cleanup;
     }
