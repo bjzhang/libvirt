@@ -194,4 +194,5 @@ stamp-h1
 
 log*
 patch*
+build.sh
 *.swp
