@@ -406,7 +406,7 @@ libxlDomainObjEndAsyncJob(libxlDriverPrivatePtr driver, virDomainObjPtr obj)
     return virObjectUnref(obj);
 }
 
-static int
+static int ATTRIBUTE_UNUSED
 libxlMigrationJobStart(libxlDriverPrivatePtr driver,
                        virDomainObjPtr vm,
                        enum libxlDomainAsyncJob job)
@@ -424,7 +424,7 @@ libxlMigrationJobStart(libxlDriverPrivatePtr driver,
     return 0;
 }
 
-static bool
+static bool ATTRIBUTE_UNUSED
 libxlMigrationJobFinish(libxlDriverPrivatePtr driver, virDomainObjPtr vm)
 {
     return libxlDomainObjEndAsyncJob(driver, vm);
