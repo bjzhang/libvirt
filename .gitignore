@@ -192,6 +192,7 @@ stamp-h1
 !/po/POTFILES.in
 !/po/libvirt.pot
 
-log_*
+log*
 patch*
 build.sh
+*.swp
