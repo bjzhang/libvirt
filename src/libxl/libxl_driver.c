@@ -2460,8 +2460,8 @@ libxlDomainCoreDump(virDomainPtr dom, const char *to, unsigned int flags)
         goto cleanup;
     }
 
-    if (libxlDomainObjBeginAsyncJobWithDriver(driver, vm,
-                                             LIBXL_ASYNC_JOB_DUMP) < 0)
+    if (libxlDomainObjBeginAsyncJob(driver, vm,
+                                    LIBXL_ASYNC_JOB_DUMP) < 0)
         goto cleanup;
 
     if (!virDomainObjIsActive(vm)) {
@@ -2484,13 +2484,16 @@ libxlDomainCoreDump(virDomainPtr dom, const char *to, unsigned int flags)
         paused = true;
     }
 
-    if (libxl_domain_core_dump(&priv->ctx, dom->id, to) != 0) {
+    virDomainObjUnlock(vm);
+    ret = libxl_domain_core_dump(&priv->ctx, dom->id, to);
+    virDomainObjLock(vm);
+
+    if (ret) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Failed to dump core of domain '%d' with libxenlight"),
                        dom->id);
         goto endjob_unpause;
     }
-
     libxlDriverLock(driver);
     if (flags & VIR_DUMP_CRASH) {
         if (libxlVmReap(driver, vm, 1, VIR_DOMAIN_SHUTOFF_CRASHED) != 0) {
@@ -3178,7 +3181,9 @@ libxlDomainCreateWithFlags(virDomainPtr dom,
         goto endjob;
     }
 
+    libxlDriverUnlock(driver);
     ret = libxlVmStart(driver, vm, (flags & VIR_DOMAIN_START_PAUSED) != 0, -1);
+    libxlDriverLock(driver);
 
 endjob:
     if (!libxlDomainObjEndJob(driver, vm))
