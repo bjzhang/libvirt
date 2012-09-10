@@ -229,6 +229,8 @@ libxlDomainObjBeginJobInternal(libxlDriverPrivatePtr driver,
     unsigned long long now;
     unsigned long long then;
 
+    VIR_INFO("enter");
+
     if (virTimeMillisNow(&now) < 0)
         return -1;
     then = now + LIBXL_JOB_WAIT_TIME;
@@ -310,6 +312,7 @@ error:
         virDomainObjLock(obj);
     }
     virObjectUnref(obj);
+    VIR_INFO("exit");
     return -1;
 }
 
@@ -389,6 +392,7 @@ libxlDomainObjEndJob(libxlDriverPrivatePtr driver, virDomainObjPtr obj)
     libxlDomainObjPrivatePtr priv = obj->privateData;
     enum libxlDomainJob job = priv->job.active;
 
+    VIR_INFO("enter");
     VIR_DEBUG("Stopping job: %s (async=%s)",
               libxlDomainJobTypeToString(job),
               libxlDomainAsyncJobTypeToString(priv->job.asyncJob));
@@ -398,6 +402,7 @@ libxlDomainObjEndJob(libxlDriverPrivatePtr driver, virDomainObjPtr obj)
         libxlDomainObjSaveJob(driver, obj);
     virCondSignal(&priv->job.cond);
 
+    VIR_INFO("exit");
     return virObjectUnref(obj);
 }
 
