@@ -14136,7 +14136,17 @@ cleanup:
 
 void virDomainObjLock(virDomainObjPtr obj)
 {
-    virMutexLock(&obj->lock);
+    int ret;
+    virMutex *lock = &obj->lock;
+    ret = pthread_mutex_trylock(&lock->lock);
+    if  ( ret < 0 ) {
+        VIR_INFO("try domain obj lock error: %d: %s", errno, strerror(errno));
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                        "%s", _("cannot acquire driver lock"));
+        virMutexLock(lock);
+    } else {
+        VIR_DEBUG("get driver lock successful");
+    }
 }
 
 void virDomainObjUnlock(virDomainObjPtr obj)
