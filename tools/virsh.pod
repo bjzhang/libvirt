@@ -1523,9 +1523,10 @@ domain's guest OS.
 
 =item B<dompmwakeup> I<domain>
 
-Wakeup a domain suspended by dompmsuspend command. Injects a wakeup
-into the guest that previously used dompmsuspend, rather than waiting
-for the previously requested duration (if any) to elapse.
+Wakeup a domain from pmsuspended state (either suspended by dompmsuspend or
+from the guest itself). Injects a wakeup into the guest that is in pmsuspended
+state, rather than waiting for the previously requested duration (if any) to
+elapse. This operation doesn't not necessarily fail if the domain is running.
 
 =item B<ttyconsole> I<domain>
 
@@ -2185,13 +2186,32 @@ variables, and defaults to C<vi>.
 
 Returns basic information about the I<pool> object.
 
-=item B<pool-list> [I<--inactive> | I<--all>] [I<--details>]
+=item B<pool-list> [I<--inactive>] [I<--all>]
+                   [I<--persistent>] [I<--transient>]
+                   [I<--autostart>] [I<--no-autostart>]
+                   [[I<--details>] [<type>]
 
-List pool objects known to libvirt.  By default, only pools in use by
-active domains are listed; I<--inactive> lists just the inactive
-pools, and I<--all> lists all pools. The I<--details> option instructs
-virsh to additionally display pool persistence and capacity related
-information where available.
+List pool objects known to libvirt.  By default, only active pools
+are listed; I<--inactive> lists just the inactive pools, and I<--all>
+lists all pools.
+
+In addition, there are several sets of filtering flags. I<--persistent> is to
+list the persistent pools, I<--transient> is to list the transient pools.
+I<--autostart> lists the autostarting pools, I<--no-autostart> lists the pools
+with autostarting disabled.
+
+You may also want to list pools with specified types using I<type>, the
+pool types must be separated by comma, e.g. --type dir,disk. The valid pool
+types include 'dir', 'fs', 'netfs', 'logical', 'disk', 'iscsi', 'scsi',
+'mpath', 'rbd', and 'sheepdog'.
+
+The I<--details> option instructs virsh to additionally
+display pool persistence and capacity related information where available.
+
+NOTE: When talking to older servers, this command is forced to use a series of
+API calls with an inherent race, where a pool might not be listed or might appear
+more than once if it changed state between calls while the list was being
+collected.  Newer servers do not have this problem.
 
 =item B<pool-name> I<uuid>
 

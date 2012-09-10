@@ -1252,6 +1252,10 @@ typedef int
     (*virDrvConnectListDefinedStoragePools)  (virConnectPtr conn,
                                               char **const names,
                                               int maxnames);
+typedef int
+    (*virDrvConnectListAllStoragePools)      (virConnectPtr conn,
+                                              virStoragePoolPtr **pools,
+                                              unsigned int flags);
 typedef char *
     (*virDrvConnectFindStoragePoolSources)   (virConnectPtr conn,
                                               const char *type,
@@ -1307,7 +1311,10 @@ typedef int
     (*virDrvStoragePoolListVolumes)          (virStoragePoolPtr pool,
                                               char **const names,
                                               int maxnames);
-
+typedef int
+    (*virDrvStoragePoolListAllVolumes)       (virStoragePoolPtr pool,
+                                              virStorageVolPtr **vols,
+                                              unsigned int flags);
 
 typedef virStorageVolPtr
     (*virDrvStorageVolLookupByName)          (virStoragePoolPtr pool,
@@ -1396,6 +1403,7 @@ struct _virStorageDriver {
     virDrvConnectListStoragePools           listPools;
     virDrvConnectNumOfDefinedStoragePools   numOfDefinedPools;
     virDrvConnectListDefinedStoragePools    listDefinedPools;
+    virDrvConnectListAllStoragePools        listAllPools;
     virDrvConnectFindStoragePoolSources     findPoolSources;
     virDrvStoragePoolLookupByName           poolLookupByName;
     virDrvStoragePoolLookupByUUID           poolLookupByUUID;
@@ -1414,6 +1422,7 @@ struct _virStorageDriver {
     virDrvStoragePoolSetAutostart           poolSetAutostart;
     virDrvStoragePoolNumOfVolumes           poolNumOfVolumes;
     virDrvStoragePoolListVolumes            poolListVolumes;
+    virDrvStoragePoolListAllVolumes         poolListAllVolumes;
 
     virDrvStorageVolLookupByName            volLookupByName;
     virDrvStorageVolLookupByKey             volLookupByKey;
