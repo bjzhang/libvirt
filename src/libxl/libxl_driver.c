@@ -99,15 +99,15 @@ libxlDriverLock(libxlDriverPrivatePtr driver)
         virReportError(VIR_ERR_INTERNAL_ERROR,
                         "%s", _("cannot acquire driver lock"));
         virMutexLock(lock);
-    } else {
-        VIR_DEBUG("get driver lock successful");
     }
+    VIR_INFO("driver lock successful");
 }
 
 static void
 libxlDriverUnlock(libxlDriverPrivatePtr driver)
 {
     virMutexUnlock(&driver->lock);
+    VIR_INFO("driver unlock successful");
 }
 
 /* job */

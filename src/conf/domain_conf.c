@@ -14142,16 +14142,16 @@ void virDomainObjLock(virDomainObjPtr obj)
     if  ( ret < 0 ) {
         VIR_INFO("try domain obj lock error: %d: %s", errno, strerror(errno));
         virReportError(VIR_ERR_INTERNAL_ERROR,
-                        "%s", _("cannot acquire driver lock"));
+                        "%s", _("cannot acquire domain obj lock"));
         virMutexLock(lock);
-    } else {
-        VIR_DEBUG("get driver lock successful");
     }
+    VIR_INFO("doamin obj lock successful");
 }
 
 void virDomainObjUnlock(virDomainObjPtr obj)
 {
     virMutexUnlock(&obj->lock);
+    VIR_INFO("doamin obj unlock successful");
 }
 
 
