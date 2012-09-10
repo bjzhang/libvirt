@@ -166,6 +166,50 @@ vshPrettyCapacity(unsigned long long val, const char **unit)
     }
 }
 
+/*
+ * Convert the strings separated by ',' into array. The caller
+ * must free the returned array after use.
+ *
+ * Returns the length of the filled array on success, or -1
+ * on error.
+ */
+int
+vshStringToArray(char *str,
+                 char ***array)
+{
+    char *str_tok = NULL;
+    unsigned int nstr_tokens = 0;
+    char **arr = NULL;
+
+    /* tokenize the string from user and save it's parts into an array */
+    if (str) {
+        nstr_tokens = 1;
+
+        /* count the delimiters */
+        str_tok = str;
+        while (*str_tok) {
+            if (*str_tok == ',')
+                nstr_tokens++;
+            str_tok++;
+        }
+
+        if (VIR_ALLOC_N(arr, nstr_tokens) < 0) {
+            virReportOOMError();
+            return -1;
+        }
+
+        /* tokenize the input string */
+        nstr_tokens = 0;
+        str_tok = str;
+        do {
+            arr[nstr_tokens] = strsep(&str_tok, ",");
+            nstr_tokens++;
+        } while (str_tok);
+    }
+
+    *array = arr;
+    return nstr_tokens;
+}
 
 virErrorPtr last_error;
 
@@ -511,6 +555,7 @@ vshEditWriteToTempFile(vshControl *ctl, const char *doc)
     char *ret;
     const char *tmpdir;
     int fd;
+    char ebuf[1024];
 
     tmpdir = getenv ("TMPDIR");
     if (!tmpdir) tmpdir = "/tmp";
@@ -521,14 +566,14 @@ vshEditWriteToTempFile(vshControl *ctl, const char *doc)
     fd = mkstemps(ret, 4);
     if (fd == -1) {
         vshError(ctl, _("mkstemps: failed to create temporary file: %s"),
-                 strerror(errno));
+                 virStrerror(errno, ebuf, sizeof(ebuf)));
         VIR_FREE(ret);
         return NULL;
     }
 
     if (safewrite(fd, doc, strlen(doc)) == -1) {
         vshError(ctl, _("write: %s: failed to write to temporary file: %s"),
-                 ret, strerror(errno));
+                 ret, virStrerror(errno, ebuf, sizeof(ebuf)));
         VIR_FORCE_CLOSE(fd);
         unlink(ret);
         VIR_FREE(ret);
@@ -536,7 +581,7 @@ vshEditWriteToTempFile(vshControl *ctl, const char *doc)
     }
     if (VIR_CLOSE(fd) < 0) {
         vshError(ctl, _("close: %s: failed to write or close temporary file: %s"),
-                 ret, strerror(errno));
+                 ret, virStrerror(errno, ebuf, sizeof(ebuf)));
         unlink(ret);
         VIR_FREE(ret);
         return NULL;
@@ -606,11 +651,12 @@ char *
 vshEditReadBackFile(vshControl *ctl, const char *filename)
 {
     char *ret;
+    char ebuf[1024];
 
     if (virFileReadAll(filename, VSH_MAX_XML_FILE, &ret) == -1) {
         vshError(ctl,
                  _("%s: failed to read temporary file: %s"),
-                 filename, strerror(errno));
+                 filename, virStrerror(errno, ebuf, sizeof(ebuf)));
         return NULL;
     }
     return ret;
@@ -637,6 +683,7 @@ cmdCd(vshControl *ctl, const vshCmd *cmd)
     const char *dir = NULL;
     char *dir_malloced = NULL;
     bool ret = true;
+    char ebuf[1024];
 
     if (!ctl->imode) {
         vshError(ctl, "%s", _("cd: command valid only in interactive mode"));
@@ -650,7 +697,8 @@ cmdCd(vshControl *ctl, const vshCmd *cmd)
         dir = "/";
 
     if (chdir(dir) == -1) {
-        vshError(ctl, _("cd: %s: %s"), strerror(errno), dir);
+        vshError(ctl, _("cd: %s: %s"),
+                 virStrerror(errno, ebuf, sizeof(ebuf)), dir);
         ret = false;
     }
 
@@ -672,11 +720,12 @@ cmdPwd(vshControl *ctl, const vshCmd *cmd ATTRIBUTE_UNUSED)
 {
     char *cwd;
     bool ret = true;
+    char ebuf[1024];
 
     cwd = getcwd(NULL, 0);
     if (!cwd) {
         vshError(ctl, _("pwd: cannot get current directory: %s"),
-                 strerror(errno));
+                 virStrerror(errno, ebuf, sizeof(ebuf)));
         ret = false;
     } else {
         vshPrint(ctl, _("%s\n"), cwd);
@@ -2187,8 +2236,8 @@ vshOutputLogFile(vshControl *ctl, int log_level, const char *msg_format,
     char *str;
     size_t len;
     const char *lvl = "";
-    struct timeval stTimeval;
-    struct tm *stTm;
+    time_t stTime;
+    struct tm stTm;
 
     if (ctl->log_fd == -1)
         return;
@@ -2198,15 +2247,15 @@ vshOutputLogFile(vshControl *ctl, int log_level, const char *msg_format,
      *
      * [YYYY.MM.DD HH:MM:SS SIGNATURE PID] LOG_LEVEL message
     */
-    gettimeofday(&stTimeval, NULL);
-    stTm = localtime(&stTimeval.tv_sec);
+    time(&stTime);
+    localtime_r(&stTime, &stTm);
     virBufferAsprintf(&buf, "[%d.%02d.%02d %02d:%02d:%02d %s %d] ",
-                      (1900 + stTm->tm_year),
-                      (1 + stTm->tm_mon),
-                      stTm->tm_mday,
-                      stTm->tm_hour,
-                      stTm->tm_min,
-                      stTm->tm_sec,
+                      (1900 + stTm.tm_year),
+                      (1 + stTm.tm_mon),
+                      stTm.tm_mday,
+                      stTm.tm_hour,
+                      stTm.tm_min,
+                      stTm.tm_sec,
                       SIGN_NAME,
                       (int) getpid());
     switch (log_level) {
@@ -2264,10 +2313,13 @@ error:
 void
 vshCloseLogFile(vshControl *ctl)
 {
+    char ebuf[1024];
+
     /* log file close */
     if (VIR_CLOSE(ctl->log_fd) < 0) {
         vshError(ctl, _("%s: failed to write log file: %s"),
-                 ctl->logfile ? ctl->logfile : "?", strerror (errno));
+                 ctl->logfile ? ctl->logfile : "?",
+                 virStrerror(errno, ebuf, sizeof(ebuf)));
     }
 
     if (ctl->logfile) {

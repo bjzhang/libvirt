@@ -2857,6 +2857,134 @@ done:
     return rv;
 }
 
+static int
+remoteConnectListAllStoragePools (virConnectPtr conn,
+                                  virStoragePoolPtr **pools,
+                                  unsigned int flags)
+{
+    int rv = -1;
+    int i;
+    virStoragePoolPtr *tmp_pools = NULL;
+    remote_connect_list_all_storage_pools_args args;
+    remote_connect_list_all_storage_pools_ret ret;
+
+    struct private_data *priv = conn->privateData;
+
+    remoteDriverLock(priv);
+
+    args.need_results = !!pools;
+    args.flags = flags;
+
+    memset(&ret, 0, sizeof(ret));
+    if (call(conn,
+             priv,
+             0,
+             REMOTE_PROC_CONNECT_LIST_ALL_STORAGE_POOLS,
+             (xdrproc_t) xdr_remote_connect_list_all_storage_pools_args,
+             (char *) &args,
+             (xdrproc_t) xdr_remote_connect_list_all_storage_pools_ret,
+             (char *) &ret) == -1)
+        goto done;
+
+    if (pools) {
+        if (VIR_ALLOC_N(tmp_pools, ret.pools.pools_len + 1) < 0) {
+            virReportOOMError();
+            goto cleanup;
+        }
+
+        for (i = 0; i < ret.pools.pools_len; i++) {
+            tmp_pools[i] = get_nonnull_storage_pool(conn, ret.pools.pools_val[i]);
+            if (!tmp_pools[i]) {
+                virReportOOMError();
+                goto cleanup;
+            }
+        }
+        *pools = tmp_pools;
+        tmp_pools = NULL;
+    }
+
+    rv = ret.ret;
+
+cleanup:
+    if (tmp_pools) {
+        for (i = 0; i < ret.pools.pools_len; i++)
+            if (tmp_pools[i])
+                virStoragePoolFree(tmp_pools[i]);
+        VIR_FREE(tmp_pools);
+    }
+
+    xdr_free((xdrproc_t) xdr_remote_connect_list_all_storage_pools_ret, (char *) &ret);
+
+done:
+    remoteDriverUnlock(priv);
+    return rv;
+}
+
+static int
+remoteStoragePoolListAllVolumes(virStoragePoolPtr pool,
+                                virStorageVolPtr **vols,
+                                unsigned int flags)
+{
+    int rv = -1;
+    int i;
+    virStorageVolPtr *tmp_vols = NULL;
+    remote_storage_pool_list_all_volumes_args args;
+    remote_storage_pool_list_all_volumes_ret ret;
+
+    struct private_data *priv = pool->conn->privateData;
+
+    remoteDriverLock(priv);
+
+    make_nonnull_storage_pool(&args.pool, pool);
+    args.need_results = !!vols;
+    args.flags = flags;
+
+    memset(&ret, 0, sizeof(ret));
+    if (call(pool->conn,
+             priv,
+             0,
+             REMOTE_PROC_STORAGE_POOL_LIST_ALL_VOLUMES,
+             (xdrproc_t) xdr_remote_storage_pool_list_all_volumes_args,
+             (char *) &args,
+             (xdrproc_t) xdr_remote_storage_pool_list_all_volumes_ret,
+             (char *) &ret) == -1)
+        goto done;
+
+    if (vols) {
+        if (VIR_ALLOC_N(tmp_vols, ret.vols.vols_len + 1) < 0) {
+            virReportOOMError();
+            goto cleanup;
+        }
+
+        for (i = 0; i < ret.vols.vols_len; i++) {
+            tmp_vols[i] = get_nonnull_storage_vol(pool->conn, ret.vols.vols_val[i]);
+            if (!tmp_vols[i]) {
+                virReportOOMError();
+                goto cleanup;
+            }
+        }
+        *vols = tmp_vols;
+        tmp_vols = NULL;
+    }
+
+    rv = ret.ret;
+
+cleanup:
+    if (tmp_vols) {
+        for (i = 0; i < ret.vols.vols_len; i++)
+            if (tmp_vols[i])
+                virStorageVolFree(tmp_vols[i]);
+        VIR_FREE(tmp_vols);
+    }
+
+    xdr_free((xdrproc_t) xdr_remote_storage_pool_list_all_volumes_ret, (char *) &ret);
+
+done:
+    remoteDriverUnlock(priv);
+    return rv;
+}
+
+
 /*----------------------------------------------------------------------*/
 
 static virDrvOpenStatus ATTRIBUTE_NONNULL (1)
@@ -5612,6 +5740,7 @@ static virStorageDriver storage_driver = {
     .listPools = remoteListStoragePools, /* 0.4.1 */
     .numOfDefinedPools = remoteNumOfDefinedStoragePools, /* 0.4.1 */
     .listDefinedPools = remoteListDefinedStoragePools, /* 0.4.1 */
+    .listAllPools = remoteConnectListAllStoragePools, /* 0.10.2 */
     .findPoolSources = remoteFindStoragePoolSources, /* 0.4.5 */
     .poolLookupByName = remoteStoragePoolLookupByName, /* 0.4.1 */
     .poolLookupByUUID = remoteStoragePoolLookupByUUID, /* 0.4.1 */
@@ -5630,6 +5759,7 @@ static virStorageDriver storage_driver = {
     .poolSetAutostart = remoteStoragePoolSetAutostart, /* 0.4.1 */
     .poolNumOfVolumes = remoteStoragePoolNumOfVolumes, /* 0.4.1 */
     .poolListVolumes = remoteStoragePoolListVolumes, /* 0.4.1 */
+    .poolListAllVolumes = remoteStoragePoolListAllVolumes, /* 0.10.0 */
 
     .volLookupByName = remoteStorageVolLookupByName, /* 0.4.1 */
     .volLookupByKey = remoteStorageVolLookupByKey, /* 0.4.1 */
