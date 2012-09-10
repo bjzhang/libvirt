@@ -47,6 +47,8 @@
 
 # define GETTIMEOFDAY(T) gettimeofday(T, NULL)
 
+# define VSH_MATCH(FLAG) (flags & (FLAG))
+
 /**
  * The log configuration
  */
@@ -328,6 +330,7 @@ int vshAskReedit(vshControl *ctl, const char *msg);
 int vshStreamSink(virStreamPtr st, const char *bytes, size_t nbytes,
                   void *opaque);
 double vshPrettyCapacity(unsigned long long val, const char **unit);
+int vshStringToArray(char *str, char ***array);
 
 /* Typedefs, function prototypes for job progress reporting.
  * There are used by some long lingering commands like

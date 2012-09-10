@@ -1058,6 +1058,7 @@ virStoragePoolDefParseString;
 virStoragePoolFormatDiskTypeToString;
 virStoragePoolFormatFileSystemNetTypeToString;
 virStoragePoolFormatFileSystemTypeToString;
+virStoragePoolList;
 virStoragePoolLoadAllConfigs;
 virStoragePoolObjAssignDef;
 virStoragePoolObjClearVols;
@@ -1177,8 +1178,6 @@ virDirCreate;
 virDoubleToStr;
 virEnumFromString;
 virEnumToString;
-virEventAddHandle;
-virEventRemoveHandle;
 virFileAbsPath;
 virFileAccessibleAs;
 virFileBuildPath;
@@ -1734,6 +1733,7 @@ virTimeStringThenRaw;
 virTypedParameterArrayClear;
 virTypedParameterArrayValidate;
 virTypedParameterAssign;
+virTypedParameterAssignFromStr;
 
 
 # viruri.h

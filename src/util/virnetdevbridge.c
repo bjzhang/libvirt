@@ -30,9 +30,9 @@
 #include "intprops.h"
 
 #include <sys/ioctl.h>
-#ifdef HAVE_NET_IF_H
-# include <net/if.h>
-#endif
+#include <sys/socket.h>
+#include <net/if.h>
+
 #ifdef __linux__
 # include <linux/sockios.h>
 # include <linux/param.h>     /* HZ                 */
@@ -45,7 +45,7 @@
 #define VIR_FROM_THIS VIR_FROM_NONE
 
 
-#if defined(HAVE_NET_IF_H) && defined(SIOCBRADDBR)
+#ifdef SIOCBRADDBR
 static int virNetDevSetupControlFull(const char *ifname,
                                      struct ifreq *ifr,
                                      int domain,

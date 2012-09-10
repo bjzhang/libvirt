@@ -536,6 +536,7 @@ static int remoteRelayDomainEventTrayChange(virConnectPtr conn ATTRIBUTE_UNUSED,
 
 static int remoteRelayDomainEventPMWakeup(virConnectPtr conn ATTRIBUTE_UNUSED,
                                           virDomainPtr dom,
+                                          int reason ATTRIBUTE_UNUSED,
                                           void *opaque) {
     virNetServerClientPtr client = opaque;
     remote_domain_event_pmwakeup_msg data;
@@ -558,6 +559,7 @@ static int remoteRelayDomainEventPMWakeup(virConnectPtr conn ATTRIBUTE_UNUSED,
 
 static int remoteRelayDomainEventPMSuspend(virConnectPtr conn ATTRIBUTE_UNUSED,
                                            virDomainPtr dom,
+                                           int reason ATTRIBUTE_UNUSED,
                                            void *opaque) {
     virNetServerClientPtr client = opaque;
     remote_domain_event_pmsuspend_msg data;
@@ -4095,6 +4097,118 @@ cleanup:
         for (i = 0; i < nsnaps; i++)
             virDomainSnapshotFree(snaps[i]);
         VIR_FREE(snaps);
+    }
+    return rv;
+}
+
+static int
+remoteDispatchConnectListAllStoragePools(virNetServerPtr server ATTRIBUTE_UNUSED,
+                                         virNetServerClientPtr client,
+                                         virNetMessagePtr msg ATTRIBUTE_UNUSED,
+                                         virNetMessageErrorPtr rerr,
+                                         remote_connect_list_all_storage_pools_args *args,
+                                         remote_connect_list_all_storage_pools_ret *ret)
+{
+    virStoragePoolPtr *pools = NULL;
+    int npools = 0;
+    int i;
+    int rv = -1;
+    struct daemonClientPrivate *priv = virNetServerClientGetPrivateData(client);
+
+    if (!priv->conn) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s", _("connection not open"));
+        goto cleanup;
+    }
+
+    if ((npools = virConnectListAllStoragePools(priv->conn,
+                                                args->need_results ? &pools : NULL,
+                                                args->flags)) < 0)
+        goto cleanup;
+
+    if (pools && npools) {
+        if (VIR_ALLOC_N(ret->pools.pools_val, npools) < 0) {
+            virReportOOMError();
+            goto cleanup;
+        }
+
+        ret->pools.pools_len = npools;
+
+        for (i = 0; i < npools; i++)
+            make_nonnull_storage_pool(ret->pools.pools_val + i, pools[i]);
+    } else {
+        ret->pools.pools_len = 0;
+        ret->pools.pools_val = NULL;
+    }
+
+    ret->ret = npools;
+
+    rv = 0;
+
+cleanup:
+    if (rv < 0)
+        virNetMessageSaveError(rerr);
+    if (pools) {
+        for (i = 0; i < npools; i++)
+            virStoragePoolFree(pools[i]);
+        VIR_FREE(pools);
+    }
+    return rv;
+}
+
+static int
+remoteDispatchStoragePoolListAllVolumes(virNetServerPtr server ATTRIBUTE_UNUSED,
+                                        virNetServerClientPtr client,
+                                        virNetMessagePtr msg ATTRIBUTE_UNUSED,
+                                        virNetMessageErrorPtr rerr,
+                                        remote_storage_pool_list_all_volumes_args *args,
+                                        remote_storage_pool_list_all_volumes_ret *ret)
+{
+    virStorageVolPtr *vols = NULL;
+    virStoragePoolPtr pool = NULL;
+    int nvols = 0;
+    int i;
+    int rv = -1;
+    struct daemonClientPrivate *priv = virNetServerClientGetPrivateData(client);
+
+    if (!priv->conn) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s", _("connection not open"));
+        goto cleanup;
+    }
+
+    if (!(pool = get_nonnull_storage_pool(priv->conn, args->pool)))
+        goto cleanup;
+
+    if ((nvols = virStoragePoolListAllVolumes(pool,
+                                              args->need_results ? &vols : NULL,
+                                              args->flags)) < 0)
+        goto cleanup;
+
+    if (vols && nvols) {
+        if (VIR_ALLOC_N(ret->vols.vols_val, nvols) < 0) {
+            virReportOOMError();
+            goto cleanup;
+        }
+
+        ret->vols.vols_len = nvols;
+
+        for (i = 0; i < nvols; i++)
+            make_nonnull_storage_vol(ret->vols.vols_val + i, vols[i]);
+    } else {
+        ret->vols.vols_len = 0;
+        ret->vols.vols_val = NULL;
+    }
+
+    ret->ret = nvols;
+
+    rv = 0;
+
+cleanup:
+    if (rv < 0)
+        virNetMessageSaveError(rerr);
+    if (vols) {
+        for (i = 0; i < nvols; i++)
+            virStorageVolFree(vols[i]);
+        VIR_FREE(vols);
     }
     return rv;
 }
