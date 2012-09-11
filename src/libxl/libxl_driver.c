@@ -320,7 +320,7 @@ error:
         virDomainObjLock(obj);
     }
     virObjectUnref(obj);
-    VIR_INFO("Enter");
+    VIR_INFO("Exit with Error");
     return -1;
 }
 
