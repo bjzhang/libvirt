@@ -129,6 +129,11 @@ struct libxlDomainJobObj {
     unsigned long long mask;            /* Jobs allowed during async job */
     unsigned long long start;           /* When the async job started */
     virDomainJobInfo info;              /* Async job progress data */
+#ifdef abort_v1
+    bool abort;                         /* Only for Async Job: This job has
+                                           been aborted, will be cancelled on
+                                           next BeginAsyncJob*/
+#endif
 };
 
 typedef struct _libxlDomainObjPrivate libxlDomainObjPrivate;
