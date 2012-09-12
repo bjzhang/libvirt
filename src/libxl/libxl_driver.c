@@ -77,7 +77,7 @@ typedef struct migrate_receive_args {
 /* Function declarations */
 static int
 libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
-             bool start_paused, int restore_fd, bool driver_locked);
+             bool start_paused, int restore_fd);
 
 /* Function definitions */
 static void
@@ -107,7 +107,6 @@ VIR_ENUM_IMPL(libxlDomainAsyncJob, LIBXL_ASYNC_JOB_LAST,
               "migration out",
               "migration in",
               "save",
-              "restore",
               "dump",
 );
 
@@ -495,7 +494,7 @@ libxlAutostartDomain(void *payload, const void *name ATTRIBUTE_UNUSED,
     virResetLastError();
 
     if (vm->autostart && !virDomainObjIsActive(vm) &&
-        libxlVmStart(driver, vm, false, -1, false) < 0) {
+        libxlVmStart(driver, vm, false, -1) < 0) {
         err = virGetLastError();
         VIR_ERROR(_("Failed to autostart VM '%s': %s"),
                   vm->def->name,
@@ -785,7 +784,7 @@ static void libxlEventHandler(int watch,
                 break;
             case SHUTDOWN_reboot:
                 libxlVmReap(driver, vm, 0, VIR_DOMAIN_SHUTOFF_SHUTDOWN);
-                libxlVmStart(driver, vm, 0, -1, false);
+                libxlVmStart(driver, vm, 0, -1);
                 break;
             default:
                 VIR_INFO("Unhandled shutdown_reason %d", info.shutdown_reason);
@@ -949,7 +948,7 @@ libxlFreeMem(libxlDomainObjPrivatePtr priv, libxl_domain_config *d_config)
  */
 static int
 libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
-             bool start_paused, int restore_fd, bool driver_locked)
+             bool start_paused, int restore_fd)
 {
     libxl_domain_config d_config;
     virDomainDefPtr def = NULL;
@@ -1019,19 +1018,10 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     if (restore_fd < 0)
         ret = libxl_domain_create_new(&priv->ctx, &d_config,
                                       NULL, &child_console_pid, &domid);
-    else {
-        virDomainObjUnlock(vm);
-        if (driver_locked) {
-            libxlDriverUnlock(driver);
-        }
+    else
         ret = libxl_domain_create_restore(&priv->ctx, &d_config, NULL,
                                           &child_console_pid, &domid,
                                           restore_fd);
-        if (driver_locked) {
-            libxlDriverLock(driver);
-        }
-        virDomainObjLock(vm);
-    }
 
     if (ret) {
         if (restore_fd < 0)
@@ -1552,7 +1542,7 @@ libxlDomainCreateXML(virConnectPtr conn, const char *xml,
     def = NULL;
 
     if (libxlVmStart(driver, vm, (flags & VIR_DOMAIN_START_PAUSED) != 0,
-                     -1, true) < 0) {
+                     -1) < 0) {
         virDomainRemoveInactive(&driver->domains, vm);
         vm = NULL;
         goto cleanup;
@@ -2329,7 +2319,7 @@ libxlDomainRestoreFlags(virConnectPtr conn, const char *from,
 
     def = NULL;
 
-    if ((ret = libxlVmStart(driver, vm, false, fd, true)) < 0 &&
+    if ((ret = libxlVmStart(driver, vm, false, fd)) < 0 &&
         !vm->persistent) {
         virDomainRemoveInactive(&driver->domains, vm);
         vm = NULL;
@@ -3076,7 +3066,7 @@ libxlDomainCreateWithFlags(virDomainPtr dom,
         goto cleanup;
     }
 
-    ret = libxlVmStart(driver, vm, (flags & VIR_DOMAIN_START_PAUSED) != 0, -1, true);
+    ret = libxlVmStart(driver, vm, (flags & VIR_DOMAIN_START_PAUSED) != 0, -1);
 
 cleanup:
     if (vm)
