@@ -3927,7 +3927,7 @@ static int libxlCheckMessageBanner(int fd, const char *banner, int banner_sz)
         ret = saferead(fd, buf, banner_sz);
     } while ( -1 == ret && EAGAIN == errno );
 
-    if ( ret != banner_sz || memcmp(buf, banner, banner_sz) ) 
+    if ( ret != banner_sz || memcmp(buf, banner, banner_sz) )
         return -1;
 
     return 0;
@@ -3946,7 +3946,7 @@ static int doParseURI(const char *uri, char **p_hostname, int *p_port)
         int n;
 
         if (virStrToLong_i(p+1, NULL, 10, &port_nr) < 0) {
-            libxlError(VIR_ERR_INVALID_ARG,
+            virReportError(VIR_ERR_INVALID_ARG, "%s",
                         _("Invalid port number"));
             return -1;
         }
@@ -3954,7 +3954,7 @@ static int doParseURI(const char *uri, char **p_hostname, int *p_port)
         /* Get the hostname. */
         n = p - uri; /* n = Length of hostname in bytes. */
         if (n <= 0) {
-            libxlError(VIR_ERR_INVALID_ARG,
+            virReportError(VIR_ERR_INVALID_ARG, "%s",
                        _("Hostname must be specified in the URI"));
             return -1;
         }
@@ -3998,13 +3998,13 @@ libxlDomainMigrateBegin3(virDomainPtr domain,
     if (!vm) {
         char uuidstr[VIR_UUID_STRING_BUFLEN];
         virUUIDFormat(domain->uuid, uuidstr);
-        libxlError(VIR_ERR_OPERATION_INVALID,
+        virReportError(VIR_ERR_OPERATION_INVALID,
                    _("no domain with matching uuid '%s'"), uuidstr);
         goto cleanup;
     }
 
     if (!virDomainObjIsActive(vm)) {
-        libxlError(VIR_ERR_OPERATION_INVALID,
+        virReportError(VIR_ERR_OPERATION_INVALID, "%s",
                          _("domain is not running"));
         goto cleanup;
     }
@@ -4044,7 +4044,7 @@ static void doMigrateReceive(void *opaque)
     } while(recv_fd < 0 && errno == EINTR);
 
     if (recv_fd < 0) {
-        libxlError(VIR_ERR_OPERATION_FAILED,
+        virReportError(VIR_ERR_OPERATION_FAILED, "%s",
                    _("Could not accept migration connection"));
         goto cleanup;
     }
@@ -4052,13 +4052,13 @@ static void doMigrateReceive(void *opaque)
 
     len = sizeof(migrate_receiver_banner);
     if (safewrite(recv_fd, migrate_receiver_banner, len) != len) {
-        libxlError(VIR_ERR_OPERATION_FAILED,
+        virReportError(VIR_ERR_OPERATION_FAILED, "%s",
                          _("Failed to write migrate_receiver_banner"));
         goto cleanup;
     }
 
     if (libxlVmStart(driver, vm, false, recv_fd) < 0) {
-        libxlError(VIR_ERR_INTERNAL_ERROR,
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                     _("Failed to restore domain with libxenlight"));
         if (!vm->persistent) {
             virDomainRemoveInactive(&driver->domains, vm);
@@ -4069,7 +4069,7 @@ static void doMigrateReceive(void *opaque)
 
     len = sizeof(migrate_receiver_ready);
     if (safewrite(recv_fd, migrate_receiver_ready, len) != len) {
-        libxlError(VIR_ERR_OPERATION_FAILED,
+        virReportError(VIR_ERR_OPERATION_FAILED, "%s",
                          _("Failed to write migrate_receiver_ready"));
     }
 
@@ -4101,7 +4101,7 @@ static int doMigrateSend(virDomainPtr dom, unsigned long flags, int sockfd)
     if (!vm) {
         char uuidstr[VIR_UUID_STRING_BUFLEN];
         virUUIDFormat(dom->uuid, uuidstr);
-        libxlError(VIR_ERR_OPERATION_INVALID,
+        virReportError(VIR_ERR_OPERATION_INVALID,
                          _("no domain with matching uuid '%s'"), uuidstr);
         goto cleanup;
     }
@@ -4119,7 +4119,7 @@ static int doMigrateSend(virDomainPtr dom, unsigned long flags, int sockfd)
     if (live == 1)
         suspinfo.flags |= XL_SUSPEND_LIVE;
     if (libxl_domain_suspend(&priv->ctx, &suspinfo, vm->def->id, sockfd) != 0) {
-        libxlError(VIR_ERR_INTERNAL_ERROR,
+        virReportError(VIR_ERR_INTERNAL_ERROR,
                     _("Failed to save domain '%d' with libxenlight"),
                     vm->def->id);
         goto cleanup;
@@ -4181,7 +4181,7 @@ libxlDomainMigratePrepare3(virConnectPtr dconn,
 
     libxlDriverLock(driver);
     if (!dom_xml) {
-        libxlError(VIR_ERR_OPERATION_INVALID,
+        virReportError(VIR_ERR_OPERATION_INVALID, "%s",
                          _("no domain XML passed"));
         goto cleanup;
     }
@@ -4214,7 +4214,7 @@ libxlDomainMigratePrepare3(virConnectPtr dconn,
         port = libxlNextFreePort(driver->reservedMigPorts, LIBXL_MIGRATION_MIN_PORT,
                                  LIBXL_MIGRATION_NUM_PORTS);
         if (port < 0) {
-            libxlError(VIR_ERR_INTERNAL_ERROR,
+            virReportError(VIR_ERR_INTERNAL_ERROR,
                        "%s", _("Unable to find an unused migration port"));
             goto cleanup;
         }
@@ -4231,7 +4231,7 @@ libxlDomainMigratePrepare3(virConnectPtr dconn,
             port = libxlNextFreePort(driver->reservedMigPorts, LIBXL_MIGRATION_MIN_PORT,
                                      LIBXL_MIGRATION_NUM_PORTS);
             if (port < 0) {
-                libxlError(VIR_ERR_INTERNAL_ERROR,
+                virReportError(VIR_ERR_INTERNAL_ERROR,
                            "%s", _("Unable to find an unused migration port"));
                 goto cleanup;
             }
@@ -4245,7 +4245,7 @@ libxlDomainMigratePrepare3(virConnectPtr dconn,
 
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd == -1) {
-        libxlError(VIR_ERR_OPERATION_FAILED,
+        virReportError(VIR_ERR_OPERATION_FAILED, "%s",
                    _("Failed to create socket for incoming migration"));
         goto cleanup;
     }
@@ -4256,13 +4256,13 @@ libxlDomainMigratePrepare3(virConnectPtr dconn,
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
 
     if (bind(sockfd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-        libxlError(VIR_ERR_OPERATION_FAILED,
+        virReportError(VIR_ERR_OPERATION_FAILED, "%s",
                    _("Fail to bind port for incoming migration"));
         goto cleanup;
     }
 
     if (listen(sockfd, MAXCONN_NUM) < 0){
-        libxlError(VIR_ERR_OPERATION_FAILED,
+        virReportError(VIR_ERR_OPERATION_FAILED, "%s",
                    _("Fail to listen to incoming migration"));
         goto cleanup;
     }
@@ -4338,7 +4338,7 @@ libxlDomainMigratePerform3(virDomainPtr dom,
     }
 
     if (virNetSocketNewConnectTCP(hostname, servname, &sock) < 0 ){
-        libxlError(VIR_ERR_OPERATION_FAILED,
+        virReportError(VIR_ERR_OPERATION_FAILED, "%s",
                    _("Failed to create socket"));
         goto cleanup;
     }
@@ -4397,7 +4397,7 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
             priv = vm->privateData;
             rc = libxl_domain_unpause(&priv->ctx, vm->def->id);
             if (rc) {
-                libxlError(VIR_ERR_OPERATION_FAILED,
+                virReportError(VIR_ERR_OPERATION_FAILED, "%s",
                            _("Failed to unpause domain"));
                 goto error;
             }
@@ -4413,7 +4413,7 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
 
 error:
     if (libxlVmReap(driver, vm, 1, VIR_DOMAIN_SHUTOFF_SAVED)) {
-        libxlError(VIR_ERR_INTERNAL_ERROR,
+        virReportError(VIR_ERR_INTERNAL_ERROR,
                    _("Failed to destroy domain '%d'"), vm->def->id);
         goto cleanup;
     }
@@ -4454,14 +4454,14 @@ libxlDomainMigrateConfirm3(virDomainPtr domain,
     if (!vm) {
         char uuidstr[VIR_UUID_STRING_BUFLEN];
         virUUIDFormat(domain->uuid, uuidstr);
-        libxlError(VIR_ERR_NO_DOMAIN,
+        virReportError(VIR_ERR_NO_DOMAIN,
                    _("no domain with matching uuid '%s'"), uuidstr);
         goto cleanup;
     }
 
     if (cancelled) {
         priv = vm->privateData;
-        libxlError(VIR_ERR_INTERNAL_ERROR,
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                    _("migration failed, try to resume on our end"));
         if (!libxl_domain_resume(&priv->ctx, vm->def->id)) {
             ret = 0;
@@ -4479,7 +4479,7 @@ libxlDomainMigrateConfirm3(virDomainPtr domain,
     }
 
     if (libxlVmReap(driver, vm, 1, VIR_DOMAIN_SHUTOFF_SAVED)) {
-        libxlError(VIR_ERR_INTERNAL_ERROR,
+        virReportError(VIR_ERR_INTERNAL_ERROR,
                    _("Failed to destroy domain '%d'"), vm->def->id);
         goto cleanup;
     }
