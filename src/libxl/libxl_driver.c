@@ -3921,10 +3921,14 @@ libxlListAllDomains(virConnectPtr conn,
 static int libxlCheckMessageBanner(int fd, const char *banner, int banner_sz)
 {
     char buf[banner_sz];
+    int ret = 0;
 
-    if (saferead(fd, buf, banner_sz) != banner_sz || memcmp(buf, banner, banner_sz)) {
+    do { 
+        ret = saferead(fd, buf, banner_sz);
+    } while ( -1 == ret && EAGAIN == errno );
+
+    if ( ret != banner_sz || memcmp(buf, banner, banner_sz) ) 
         return -1;
-    }
 
     return 0;
 }
@@ -4308,6 +4312,7 @@ libxlDomainMigratePerform3(virDomainPtr dom,
                             const char *dname ATTRIBUTE_UNUSED,
                             unsigned long resource ATTRIBUTE_UNUSED)
 {
+    libxlDriverPrivatePtr driver = dom->conn->privateData;
     char *hostname = NULL;
     int port = 0;
     char *servname = NULL;
@@ -4316,6 +4321,8 @@ libxlDomainMigratePerform3(virDomainPtr dom,
     int ret = -1;
 
     virCheckFlags(LIBXL_MIGRATION_FLAGS, -1);
+
+    libxlDriverLock(driver);
 
     if (doParseURI(uri, &hostname, &port))
         goto cleanup;
@@ -4343,6 +4350,7 @@ cleanup:
     virNetSocketFree(sock);
     VIR_FREE(hostname);
     VIR_FREE(servname);
+    libxlDriverUnlock(driver);
     return ret;
 }
 
