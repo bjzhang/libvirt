@@ -4522,7 +4522,6 @@ libxlDomainMigrateBegin3(virDomainPtr domain,
                           const char *dname ATTRIBUTE_UNUSED,
                           unsigned long resource ATTRIBUTE_UNUSED)
 {
-    VIR_INFO("Enter");
     libxlDriverPrivatePtr driver = domain->conn->privateData;
     virDomainObjPtr vm;
     virDomainDefPtr def = NULL;
@@ -5011,7 +5010,7 @@ cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
     libxlDriverUnlock(driver);
-    VIR_INFO("Exit with ret: %d, dom: %lu", ret, (unsigned long)dom);
+    VIR_INFO("Exit with ret: %d, dom: %lu", rc, (unsigned long)dom);
     return dom;
 }
 
