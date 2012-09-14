@@ -4571,7 +4571,7 @@ cleanup:
     if (vm)
         virDomainObjUnlock(vm);
     libxlDriverUnlock(driver);
-    VIR_INFO("Exit with ret: %d, xml: %lu", (unsigned long)xml);
+    VIR_INFO("Exit with ret: %d, xml: %lu", ret, (unsigned long)xml);
     return xml;
 }
 
@@ -4701,7 +4701,7 @@ static int doMigrateSend(libxlDriverPrivatePtr driver, virDomainObjPtr vm, unsig
 cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
-    VIR_INFO("Exit with ret: %d");
+    VIR_INFO("Exit with ret: %d", ret);
     return ret;
 }
 
@@ -4855,7 +4855,7 @@ end:
         virDomainObjUnlock(vm);
     VIR_FREE(hostname);
     libxlDriverUnlock(driver);
-    VIR_INFO("Exit with ret: %d");
+    VIR_INFO("Exit with ret: %d", ret);
     return ret;
 }
 
@@ -4925,7 +4925,7 @@ cleanup:
     if (vm)
         virDomainObjUnlock(vm);
     libxlDriverUnlock(driver);
-    VIR_INFO("Exit with ret: %d");
+    VIR_INFO("Exit with ret: %d", ret);
     return ret;
 }
 
@@ -5011,7 +5011,7 @@ cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
     libxlDriverUnlock(driver);
-    VIR_INFO("Exit with ret: %d, dom: %lu", (unsigned long)dom);
+    VIR_INFO("Exit with ret: %d, dom: %lu", ret, (unsigned long)dom);
     return dom;
 }
 
@@ -5088,7 +5088,7 @@ cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
     libxlDriverUnlock(driver);
-    VIR_INFO("Exit with ret: %d");
+    VIR_INFO("Exit with ret: %d", ret);
     return ret;
 }
 
