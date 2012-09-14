@@ -4522,6 +4522,7 @@ libxlDomainMigrateBegin3(virDomainPtr domain,
                           const char *dname ATTRIBUTE_UNUSED,
                           unsigned long resource ATTRIBUTE_UNUSED)
 {
+    VIR_INFO("Enter");
     libxlDriverPrivatePtr driver = domain->conn->privateData;
     virDomainObjPtr vm;
     virDomainDefPtr def = NULL;
@@ -4530,6 +4531,7 @@ libxlDomainMigrateBegin3(virDomainPtr domain,
 
     virCheckFlags(LIBXL_MIGRATION_FLAGS, NULL);
 
+    VIR_INFO("Enter");
     libxlDriverLock(driver);
     vm = virDomainFindByUUID(&driver->domains, domain->uuid);
     if (!vm) {
@@ -4569,6 +4571,7 @@ cleanup:
     if (vm)
         virDomainObjUnlock(vm);
     libxlDriverUnlock(driver);
+    VIR_INFO("Exit with ret: %d, xml: %lu", (unsigned long)xml);
     return xml;
 }
 
@@ -4585,6 +4588,7 @@ static void doMigrateReceive(void *opaque)
     int len;
     int ret = -1;
 
+    VIR_INFO("Enter");
     do {
         recv_fd = accept(sockfd, (struct sockaddr *)&new_addr, &socklen);
     } while(recv_fd < 0 && errno == EINTR);
@@ -4634,6 +4638,7 @@ cleanup:
         virDomainObjUnlock(vm);
     VIR_FREE(opaque);
     libxlDriverUnlock(driver);
+    VIR_INFO("Exit");
     return;
 }
 
@@ -4645,6 +4650,7 @@ static int doMigrateSend(libxlDriverPrivatePtr driver, virDomainObjPtr vm, unsig
     int live = 0;
     int ret = -1;
 
+    VIR_INFO("Enter");
     if (flags & VIR_MIGRATE_LIVE)
         live = 1;
 
@@ -4695,6 +4701,7 @@ static int doMigrateSend(libxlDriverPrivatePtr driver, virDomainObjPtr vm, unsig
 cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
+    VIR_INFO("Exit with ret: %d");
     return ret;
 }
 
@@ -4724,6 +4731,7 @@ libxlDomainMigratePrepare3(virConnectPtr dconn,
 
     virCheckFlags(LIBXL_MIGRATION_FLAGS, -1);
 
+    VIR_INFO("Enter");
     libxlDriverLock(driver);
     if (!dom_xml) {
         virReportError(VIR_ERR_OPERATION_INVALID, "%s",
@@ -4847,6 +4855,7 @@ end:
         virDomainObjUnlock(vm);
     VIR_FREE(hostname);
     libxlDriverUnlock(driver);
+    VIR_INFO("Exit with ret: %d");
     return ret;
 }
 
@@ -4874,6 +4883,7 @@ libxlDomainMigratePerform3(virDomainPtr dom,
 
     virCheckFlags(LIBXL_MIGRATION_FLAGS, -1);
 
+    VIR_INFO("Enter");
     libxlDriverLock(driver);
     vm = virDomainFindByUUID(&driver->domains, dom->uuid);
     if (!vm) {
@@ -4915,6 +4925,7 @@ cleanup:
     if (vm)
         virDomainObjUnlock(vm);
     libxlDriverUnlock(driver);
+    VIR_INFO("Exit with ret: %d");
     return ret;
 }
 
@@ -4941,6 +4952,7 @@ libxlDomainMigrateFinish3(virConnectPtr dconn,
 
     virCheckFlags(LIBXL_MIGRATION_FLAGS, NULL);
 
+    VIR_INFO("Enter");
     libxlDriverLock(driver);
 
     if (doParseURI(uri, &hostname, &port))
@@ -4999,6 +5011,7 @@ cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
     libxlDriverUnlock(driver);
+    VIR_INFO("Exit with ret: %d, dom: %lu", (unsigned long)dom);
     return dom;
 }
 
@@ -5017,6 +5030,7 @@ libxlDomainMigrateConfirm3(virDomainPtr domain,
 
     virCheckFlags(LIBXL_MIGRATION_FLAGS, -1);
 
+    VIR_INFO("Enter");
     libxlDriverLock(driver);
     vm = virDomainFindByUUID(&driver->domains, domain->uuid);
     if (!vm) {
@@ -5074,6 +5088,7 @@ cleanup:
     if (event)
         libxlDomainEventQueue(driver, event);
     libxlDriverUnlock(driver);
+    VIR_INFO("Exit with ret: %d");
     return ret;
 }
 
