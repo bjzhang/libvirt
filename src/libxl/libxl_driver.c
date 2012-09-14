@@ -402,23 +402,13 @@ libxlMigrationJobStart(libxlDriverPrivatePtr driver,
                        virDomainObjPtr vm,
                        enum libxlDomainAsyncJob job)
 {
-    libxlDomainObjPrivatePtr priv = vm->privateData;
-
-    if (libxlDomainObjBeginAsyncJobWithDriver(driver, vm, job) < 0)
-        return -1;
-
-    libxlDomainObjSetAsyncJobMask(vm, DEFAULT_JOB_MASK |
-                                  JOB_MASK(LIBXL_JOB_MIGRATION_OP));
-
-    priv->job.info.type = VIR_DOMAIN_JOB_UNBOUNDED;
-
     return 0;
 }
 
 static bool ATTRIBUTE_UNUSED
 libxlMigrationJobFinish(libxlDriverPrivatePtr driver, virDomainObjPtr vm)
 {
-    return libxlDomainObjEndAsyncJob(driver, vm);
+    return true;
 }
 /* job function finish */
 
