@@ -4347,7 +4347,7 @@ libxlDomainMigratePerform3(virDomainPtr dom,
     ret = doMigrateSend(dom, flags, sockfd);
 
 cleanup:
-    virNetSocketFree(sock);
+    virObjectUnref(sock);
     VIR_FREE(hostname);
     VIR_FREE(servname);
     libxlDriverUnlock(driver);
