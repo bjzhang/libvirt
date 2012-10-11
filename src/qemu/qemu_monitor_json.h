@@ -15,7 +15,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Author: Daniel P. Berrange <berrange@redhat.com>
@@ -41,12 +41,6 @@ int qemuMonitorJSONHumanCommandWithFd(qemuMonitorPtr mon,
                                       char **reply);
 
 int qemuMonitorJSONSetCapabilities(qemuMonitorPtr mon);
-
-int qemuMonitorJSONCheckCommands(qemuMonitorPtr mon,
-                                 virBitmapPtr qemuCaps,
-                                 int *json_hmp);
-int qemuMonitorJSONCheckEvents(qemuMonitorPtr mon,
-                               virBitmapPtr qemuCaps);
 
 int qemuMonitorJSONStartCPUs(qemuMonitorPtr mon,
                              virConnectPtr conn);
@@ -135,14 +129,14 @@ int qemuMonitorJSONGetMigrationStatus(qemuMonitorPtr mon,
 int qemuMonitorJSONMigrate(qemuMonitorPtr mon,
                            unsigned int flags,
                            const char *uri);
+int qemuMonitorJSONGetSpiceMigrationStatus(qemuMonitorPtr mon,
+                                           bool *spice_migrated);
+
 
 int qemuMonitorJSONMigrateCancel(qemuMonitorPtr mon);
 
 int qemuMonitorJSONDump(qemuMonitorPtr mon,
-                        unsigned int flags,
-                        const char *protocol,
-                        unsigned long long begin,
-                        unsigned long long length);
+                        const char *protocol);
 
 int qemuMonitorJSONGraphicsRelocate(qemuMonitorPtr mon,
                                     int type,
@@ -283,5 +277,36 @@ int qemuMonitorJSONGetBlockIoThrottle(qemuMonitorPtr mon,
                                       virDomainBlockIoTuneInfoPtr reply);
 
 int qemuMonitorJSONSystemWakeup(qemuMonitorPtr mon);
+
+int qemuMonitorJSONGetVersion(qemuMonitorPtr mon,
+                              int *major,
+                              int *minor,
+                              int *micro,
+                              char **package)
+    ATTRIBUTE_NONNULL(2) ATTRIBUTE_NONNULL(3) ATTRIBUTE_NONNULL(4);
+
+int qemuMonitorJSONGetMachines(qemuMonitorPtr mon,
+                               qemuMonitorMachineInfoPtr **machines)
+    ATTRIBUTE_NONNULL(2);
+
+int qemuMonitorJSONGetCPUDefinitions(qemuMonitorPtr mon,
+                                     char ***cpus)
+    ATTRIBUTE_NONNULL(2);
+
+int qemuMonitorJSONGetCommands(qemuMonitorPtr mon,
+                               char ***commands)
+    ATTRIBUTE_NONNULL(2);
+int qemuMonitorJSONGetEvents(qemuMonitorPtr mon,
+                             char ***events)
+    ATTRIBUTE_NONNULL(2);
+
+int qemuMonitorJSONGetObjectTypes(qemuMonitorPtr mon,
+                                  char ***types)
+    ATTRIBUTE_NONNULL(2);
+int qemuMonitorJSONGetObjectProps(qemuMonitorPtr mon,
+                                  const char *type,
+                                  char ***props)
+    ATTRIBUTE_NONNULL(2) ATTRIBUTE_NONNULL(3);
+char *qemuMonitorJSONGetTargetArch(qemuMonitorPtr mon);
 
 #endif /* QEMU_MONITOR_JSON_H */

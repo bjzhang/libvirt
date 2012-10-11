@@ -556,7 +556,16 @@ LIBVIRT_0.10.0 {
 
 LIBVIRT_0.10.2 {
     global:
+        virConnectListAllInterfaces;
+        virConnectListAllNetworks;
+        virConnectListAllNodeDevices;
+        virConnectListAllNWFilters;
+        virConnectListAllSecrets;
         virConnectListAllStoragePools;
+        virDomainBlockCommit;
+        virNetworkUpdate;
+        virNodeGetMemoryParameters;
+        virNodeSetMemoryParameters;
         virStoragePoolListAllVolumes;
 } LIBVIRT_0.10.0;
 

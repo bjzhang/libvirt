@@ -15,7 +15,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Author: Daniel P. Berrange <berrange@redhat.com>
@@ -1347,6 +1347,7 @@ virStorageBackendStablePath(virStoragePoolObjPtr pool,
     struct dirent *dent;
     char *stablepath;
     int opentries = 0;
+    int retry = 0;
 
     /* Short circuit if pool has no target, or if its /dev */
     if (pool->def->target.path == NULL ||
@@ -1355,7 +1356,7 @@ virStorageBackendStablePath(virStoragePoolObjPtr pool,
         goto ret_strdup;
 
     /* Skip whole thing for a pool which isn't in /dev
-     * so we don't mess will filesystem/dir based pools
+     * so we don't mess filesystem/dir based pools
      */
     if (!STRPREFIX(pool->def->target.path, "/dev"))
         goto ret_strdup;
@@ -1384,8 +1385,12 @@ virStorageBackendStablePath(virStoragePoolObjPtr pool,
     /* The pool is pointing somewhere like /dev/disk/by-path
      * or /dev/disk/by-id, so we need to check all symlinks in
      * the target directory and figure out which one points
-     * to this device node
+     * to this device node.
+     *
+     * And it might need some time till the stabe path shows
+     * up, so add timeout to retry here.
      */
+ retry:
     while ((dent = readdir(dh)) != NULL) {
         if (dent->d_name[0] == '.')
             continue;
@@ -1404,6 +1409,11 @@ virStorageBackendStablePath(virStoragePoolObjPtr pool,
         }
 
         VIR_FREE(stablepath);
+    }
+
+    if (++retry < 100) {
+        usleep(100 * 1000);
+        goto retry;
     }
 
     closedir(dh);

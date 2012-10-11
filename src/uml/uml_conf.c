@@ -15,7 +15,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Author: Daniel P. Berrange <berrange@redhat.com>
@@ -51,9 +51,6 @@
 
 
 #define VIR_FROM_THIS VIR_FROM_UML
-
-#define umlLog(level, msg, ...)                                     \
-        virLogMessage(__FILE__, level, 0, msg, __VA_ARGS__)
 
 
 static int umlDefaultConsoleType(const char *ostype ATTRIBUTE_UNUSED)
@@ -142,7 +139,8 @@ umlConnectTapDevice(virConnectPtr conn,
                                        vm->uuid, NULL,
                                        virDomainNetGetActualVirtPortProfile(net),
                                        virDomainNetGetActualVlan(net),
-                                       VIR_NETDEV_TAP_CREATE_IFUP) < 0) {
+                                       VIR_NETDEV_TAP_CREATE_IFUP |
+                                       VIR_NETDEV_TAP_CREATE_PERSIST) < 0) {
         if (template_ifname)
             VIR_FREE(net->ifname);
         goto error;

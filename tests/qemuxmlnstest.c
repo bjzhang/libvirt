@@ -25,7 +25,7 @@ static struct qemud_driver driver;
 
 static int testCompareXMLToArgvFiles(const char *xml,
                                      const char *cmdline,
-                                     virBitmapPtr extraFlags,
+                                     qemuCapsPtr extraFlags,
                                      const char *migrateFrom,
                                      int migrateFd,
                                      bool json,
@@ -92,9 +92,6 @@ static int testCompareXMLToArgvFiles(const char *xml,
                     QEMU_CAPS_NO_ACPI,
                     QEMU_CAPS_LAST);
 
-    if (qemudCanonicalizeMachine(&driver, vmdef) < 0)
-        goto fail;
-
     if (qemuCapsGet(extraFlags, QEMU_CAPS_DEVICE))
         qemuDomainAssignAddresses(vmdef, extraFlags, NULL);
 
@@ -102,10 +99,6 @@ static int testCompareXMLToArgvFiles(const char *xml,
     VIR_FREE(log);
     virResetLastError();
 
-    /* We do not call qemuCapsExtractVersionInfo() before calling
-     * qemuBuildCommandLine(), so we should set QEMU_CAPS_PCI_MULTIBUS for
-     * x86_64 and i686 architectures here.
-     */
     if (STREQLEN(vmdef->os.arch, "x86_64", 6) ||
         STREQLEN(vmdef->os.arch, "i686", 4)) {
         qemuCapsSet(extraFlags, QEMU_CAPS_PCI_MULTIBUS);
@@ -164,7 +157,7 @@ static int testCompareXMLToArgvFiles(const char *xml,
 
 struct testInfo {
     const char *name;
-    virBitmapPtr extraFlags;
+    qemuCapsPtr extraFlags;
     const char *migrateFrom;
     int migrateFd;
     bool json;
@@ -238,7 +231,7 @@ mymain(void)
         if (virtTestRun("QEMU XML-2-ARGV " name,                        \
                         1, testCompareXMLToArgvHelper, &info) < 0)      \
             ret = -1;                                                   \
-        qemuCapsFree(info.extraFlags);                                  \
+        virObjectUnref(info.extraFlags);                                \
     } while (0)
 
 # define DO_TEST(name, expectError, ...)                                \

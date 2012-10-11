@@ -87,6 +87,7 @@ UTIL_SOURCES =							\
 		util/virnodesuspend.c util/virnodesuspend.h	\
 		util/virobject.c util/virobject.h		\
 		util/virpidfile.c util/virpidfile.h		\
+		util/virprocess.c util/virprocess.h		\
 		util/virtypedparam.c util/virtypedparam.h	\
 		util/xml.c util/xml.h				\
 		util/virterror.c util/virterror_internal.h	\
@@ -552,8 +553,22 @@ PARALLELS_DRIVER_SOURCES =					\
 NETWORK_DRIVER_SOURCES =					\
 		network/bridge_driver.h network/bridge_driver.c
 
-INTERFACE_DRIVER_SOURCES =					\
-		interface/netcf_driver.h interface/netcf_driver.c
+INTERFACE_DRIVER_SOURCES =
+
+if WITH_INTERFACE
+INTERFACE_DRIVER_SOURCES +=					\
+		interface/interface_driver.h        \
+		interface/interface_driver.c
+
+if WITH_NETCF
+INTERFACE_DRIVER_SOURCES +=					\
+		interface/interface_backend_netcf.c
+endif
+if HAVE_UDEV
+INTERFACE_DRIVER_SOURCES +=					\
+		interface/interface_backend_udev.c
+endif
+endif
 
 SECRET_DRIVER_SOURCES =						\
 		secret/secret_driver.h secret/secret_driver.c
@@ -1021,7 +1036,7 @@ endif
 EXTRA_DIST += network/default.xml
 
 
-if WITH_NETCF
+if WITH_INTERFACE
 if WITH_DRIVER_MODULES
 mod_LTLIBRARIES += libvirt_driver_interface.la
 else
@@ -1029,10 +1044,18 @@ noinst_LTLIBRARIES += libvirt_driver_interface.la
 # Stateful, so linked to daemon instead
 #libvirt_la_BUILT_LIBADD += libvirt_driver_interface.la
 endif
-libvirt_driver_interface_la_CFLAGS = $(NETCF_CFLAGS) \
-		-I$(top_srcdir)/src/conf $(AM_CFLAGS)
+libvirt_driver_interface_la_CFLAGS = -I$(top_srcdir)/src/conf $(AM_CFLAGS)
 libvirt_driver_interface_la_LDFLAGS = $(AM_LDFLAGS)
-libvirt_driver_interface_la_LIBADD = $(NETCF_LIBS)
+libvirt_driver_interface_la_LIBADD =
+if WITH_NETCF
+libvirt_driver_interface_la_CFLAGS += $(NETCF_CFLAGS)
+libvirt_driver_interface_la_LIBADD += $(NETCF_LIBS)
+else
+if HAVE_UDEV
+libvirt_driver_interface_la_CFLAGS += $(UDEV_CFLAGS)
+libvirt_driver_interface_la_LIBADD += $(UDEV_LIBS)
+endif
+endif
 if WITH_DRIVER_MODULES
 libvirt_driver_interface_la_LIBADD += ../gnulib/lib/libgnu.la
 libvirt_driver_interface_la_LDFLAGS += -module -avoid-version

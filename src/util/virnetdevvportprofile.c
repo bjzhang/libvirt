@@ -12,7 +12,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Authors:
@@ -374,7 +374,7 @@ virNetDevVPortProfileMerge(virNetDevVPortProfilePtr orig,
                            orig->profileID, mods->profileID);
             return -1;
         }
-        if (virStrcpyStatic(orig->profileID, mods->profileID)) {
+        if (virStrcpyStatic(orig->profileID, mods->profileID) == NULL) {
             /* this should never happen - it indicates mods->profileID
              * isn't properly null terminated. */
             virReportError(VIR_ERR_INTERNAL_ERROR, "%s",

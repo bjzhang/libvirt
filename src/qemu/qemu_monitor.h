@@ -15,7 +15,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Author: Daniel P. Berrange <berrange@redhat.com>
@@ -28,7 +28,6 @@
 # include "internal.h"
 
 # include "domain_conf.h"
-# include "qemu_conf.h"
 # include "bitmap.h"
 # include "virhash.h"
 # include "json.h"
@@ -147,13 +146,15 @@ qemuMonitorPtr qemuMonitorOpen(virDomainObjPtr vm,
                                int json,
                                qemuMonitorCallbacksPtr cb)
     ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_NONNULL(4);
+qemuMonitorPtr qemuMonitorOpenFD(virDomainObjPtr vm,
+                                 int sockfd,
+                                 int json,
+                                 qemuMonitorCallbacksPtr cb)
+    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(4);
 
 void qemuMonitorClose(qemuMonitorPtr mon);
 
-int qemuMonitorSetCapabilities(qemuMonitorPtr mon,
-                               virBitmapPtr qemuCaps);
-
-int qemuMonitorCheckHMP(qemuMonitorPtr mon, const char *cmd);
+int qemuMonitorSetCapabilities(qemuMonitorPtr mon);
 
 void qemuMonitorLock(qemuMonitorPtr mon);
 void qemuMonitorUnlock(qemuMonitorPtr mon);
@@ -339,6 +340,8 @@ int qemuMonitorGetMigrationStatus(qemuMonitorPtr mon,
                                   unsigned long long *transferred,
                                   unsigned long long *remaining,
                                   unsigned long long *total);
+int qemuMonitorGetSpiceMigrationStatus(qemuMonitorPtr mon,
+                                       bool *spice_migrated);
 
 typedef enum {
   QEMU_MONITOR_MIGRATE_BACKGROUND	= 1 << 0,
@@ -383,17 +386,8 @@ int qemuMonitorMigrateToUnix(qemuMonitorPtr mon,
 
 int qemuMonitorMigrateCancel(qemuMonitorPtr mon);
 
-typedef enum {
-  QEMU_MONITOR_DUMP_HAVE_FILTER  = 1 << 0,
-  QEMU_MONITOR_DUMP_PAGING       = 1 << 1,
-  QEMU_MONITOR_DUMP_FLAGS_LAST
-} QEMU_MONITOR_DUMP;
-
 int qemuMonitorDumpToFd(qemuMonitorPtr mon,
-                        unsigned int flags,
-                        int fd,
-                        unsigned long long begin,
-                        unsigned long long length);
+                        int fd);
 
 int qemuMonitorGraphicsRelocate(qemuMonitorPtr mon,
                                 int type,
@@ -573,6 +567,43 @@ int qemuMonitorGetBlockIoThrottle(qemuMonitorPtr mon,
                                   virDomainBlockIoTuneInfoPtr reply);
 
 int qemuMonitorSystemWakeup(qemuMonitorPtr mon);
+
+int qemuMonitorGetVersion(qemuMonitorPtr mon,
+                          int *major,
+                          int *minor,
+                          int *micro,
+                          char **package)
+    ATTRIBUTE_NONNULL(2) ATTRIBUTE_NONNULL(3) ATTRIBUTE_NONNULL(4);
+
+
+typedef struct _qemuMonitorMachineInfo qemuMonitorMachineInfo;
+typedef qemuMonitorMachineInfo *qemuMonitorMachineInfoPtr;
+
+struct _qemuMonitorMachineInfo {
+    char *name;
+    bool isDefault;
+    char *alias;
+};
+
+int qemuMonitorGetMachines(qemuMonitorPtr mon,
+                           qemuMonitorMachineInfoPtr **machines);
+
+void qemuMonitorMachineInfoFree(qemuMonitorMachineInfoPtr machine);
+
+int qemuMonitorGetCPUDefinitions(qemuMonitorPtr mon,
+                                 char ***cpus);
+
+int qemuMonitorGetCommands(qemuMonitorPtr mon,
+                           char ***commands);
+int qemuMonitorGetEvents(qemuMonitorPtr mon,
+                         char ***events);
+
+int qemuMonitorGetObjectTypes(qemuMonitorPtr mon,
+                              char ***types);
+int qemuMonitorGetObjectProps(qemuMonitorPtr mon,
+                              const char *type,
+                              char ***props);
+char *qemuMonitorGetTargetArch(qemuMonitorPtr mon);
 
 /**
  * When running two dd process and using <> redirection, we need a

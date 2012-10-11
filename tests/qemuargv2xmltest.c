@@ -142,6 +142,8 @@ mymain(void)
 
     /* Can't roundtrip vcpu  cpuset attribute */
     /*DO_TEST("minimal", QEMU_CAPS_NAME);*/
+    DO_TEST("machine-core-on");
+    DO_TEST("machine-core-off");
     DO_TEST("boot-cdrom");
     DO_TEST("boot-network");
     DO_TEST("boot-floppy");
@@ -151,6 +153,10 @@ mymain(void)
 
     /* Can't roundtrip xenner arch */
     /*DO_TEST("bootloader");*/
+
+    DO_TEST("reboot-timeout-enabled");
+    DO_TEST("reboot-timeout-disabled");
+
     DO_TEST("clock-utc");
     DO_TEST("clock-localtime");
     DO_TEST("disk-cdrom");

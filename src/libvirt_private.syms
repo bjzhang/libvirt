@@ -6,12 +6,24 @@
 #
 
 # bitmap.h
-virBitmapAlloc;
+virBitmapClearAll;
 virBitmapClearBit;
+virBitmapCopy;
+virBitmapEqual;
+virBitmapFormat;
 virBitmapFree;
 virBitmapGetBit;
+virBitmapIsAllSet;
+virBitmapNew;
+virBitmapNewCopy;
+virBitmapNewData;
+virBitmapNextSetBit;
+virBitmapParse;
+virBitmapSetAll;
 virBitmapSetBit;
+virBitmapSize;
 virBitmapString;
+virBitmapToData;
 
 
 # buf.h
@@ -150,12 +162,9 @@ virCommandSetPreExecHook;
 virCommandSetWorkingDirectory;
 virCommandToString;
 virCommandTransferFD;
-virCommandTranslateStatus;
 virCommandWait;
 virCommandWriteArgLog;
 virFork;
-virPidAbort;
-virPidWait;
 virRun;
 
 
@@ -263,9 +272,13 @@ virBlkioDeviceWeightArrayClear;
 virDiskNameToBusDeviceIndex;
 virDiskNameToIndex;
 virDomainActualNetDefFree;
+virDomainApicEoiTypeFromString;
+virDomainApicEoiTypeToString;
 virDomainAssignDef;
 virDomainBlockedReasonTypeFromString;
 virDomainBlockedReasonTypeToString;
+virDomainBootMenuTypeFromString;
+virDomainBootMenuTypeToString;
 virDomainChrConsoleTargetTypeFromString;
 virDomainChrConsoleTargetTypeToString;
 virDomainChrDefForeach;
@@ -295,8 +308,6 @@ virDomainControllerRemove;
 virDomainControllerTypeToString;
 virDomainCpuPlacementModeTypeFromString;
 virDomainCpuPlacementModeTypeToString;
-virDomainCpuSetFormat;
-virDomainCpuSetParse;
 virDomainDefAddImplicitControllers;
 virDomainDefCheckABIStability;
 virDomainDefClearDeviceAliases;
@@ -412,6 +423,8 @@ virDomainLiveConfigHelperMethod;
 virDomainLoadAllConfigs;
 virDomainMemballoonModelTypeFromString;
 virDomainMemballoonModelTypeToString;
+virDomainMemDumpTypeFromString;
+virDomainMemDumpTypeToString;
 virDomainNetDefFree;
 virDomainNetFind;
 virDomainNetGetActualBandwidth;
@@ -513,6 +526,7 @@ virDomainTimerTickpolicyTypeToString;
 virDomainTimerTrackTypeFromString;
 virDomainTimerTrackTypeToString;
 virDomainVcpuPinAdd;
+virDomainVcpuPinDefArrayFree;
 virDomainVcpuPinDefCopy;
 virDomainVcpuPinDefFree;
 virDomainVcpuPinDel;
@@ -826,6 +840,8 @@ virNetDevVPortTypeToString;
 # network_conf.h
 virNetworkAssignDef;
 virNetworkConfigFile;
+virNetworkConfigChangeSetup;
+virNetworkDefCopy;
 virNetworkDefFormat;
 virNetworkDefFree;
 virNetworkDefGetIpByIndex;
@@ -837,20 +853,28 @@ virNetworkFindByName;
 virNetworkFindByUUID;
 virNetworkIpDefNetmask;
 virNetworkIpDefPrefix;
+virNetworkList;
 virNetworkLoadAllConfigs;
+virNetworkObjAssignDef;
+virNetworkObjFree;
+virNetworkObjGetPersistentDef;
 virNetworkObjIsDuplicate;
 virNetworkObjListFree;
 virNetworkObjLock;
+virNetworkObjReplacePersistentDef;
+virNetworkObjSetDefTransient;
 virNetworkObjUnlock;
-virNetworkObjFree;
+virNetworkObjUpdate;
 virNetworkRemoveInactive;
 virNetworkSaveConfig;
+virNetworkSaveStatus;
 virNetworkSetBridgeMacAddr;
 virNetworkSetBridgeName;
 virPortGroupFindByName;
 
 
 # node_device_conf.h
+virNodeDevCapTypeFromString;
 virNodeDevCapTypeToString;
 virNodeDevCapsDefFree;
 virNodeDeviceAssignDef;
@@ -864,6 +888,7 @@ virNodeDeviceFindBySysfsPath;
 virNodeDeviceGetParentHost;
 virNodeDeviceGetWWNs;
 virNodeDeviceHasCap;
+virNodeDeviceList;
 virNodeDeviceObjListFree;
 virNodeDeviceObjLock;
 virNodeDeviceObjRemove;
@@ -877,7 +902,9 @@ nodeGetCPUStats;
 nodeGetCellsFreeMemory;
 nodeGetFreeMemory;
 nodeGetInfo;
+nodeGetMemoryParameters;
 nodeGetMemoryStats;
+nodeSetMemoryParameters;
 
 
 # nwfilter_conf.h
@@ -1206,6 +1233,7 @@ virFileUnlock;
 virFileWaitForDevices;
 virFileWriteStr;
 virFindFileInPath;
+virFormatIntDecimal;
 virGetGroupID;
 virGetGroupName;
 virGetHostname;
@@ -1218,7 +1246,6 @@ virGetUserName;
 virHexToBin;
 virIndexToDiskName;
 virIsDevMapperDevice;
-virKillProcess;
 virParseNumber;
 virParseVersionString;
 virPipeReadUntilEOF;
@@ -1241,6 +1268,7 @@ virStrToLong_ull;
 virStrcpy;
 virStrncpy;
 virTrimSpaces;
+virValidateWWN;
 virVasprintf;
 
 
@@ -1675,6 +1703,14 @@ virPidFileWrite;
 virPidFileWritePath;
 virPidFileDelete;
 virPidFileDeletePath;
+
+
+# virprocess.h
+virProcessAbort;
+virProcessKill;
+virProcessKillPainfully;
+virProcessTranslateStatus;
+virProcessWait;
 
 
 # virrandom.h

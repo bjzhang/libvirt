@@ -15,7 +15,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Author: Daniel P. Berrange <berrange@redhat.com>
@@ -195,7 +195,7 @@ int qemuSetupHostUsbDeviceCgroup(usbDevice *dev ATTRIBUTE_UNUSED,
 
 int qemuSetupCgroup(struct qemud_driver *driver,
                     virDomainObjPtr vm,
-                    char *nodemask)
+                    virBitmapPtr nodemask)
 {
     virCgroupPtr cgroup = NULL;
     int rc;
@@ -412,10 +412,9 @@ int qemuSetupCgroup(struct qemud_driver *driver,
         char *mask = NULL;
         if (vm->def->numatune.memory.placement_mode ==
             VIR_DOMAIN_NUMATUNE_MEM_PLACEMENT_MODE_AUTO)
-            mask = virDomainCpuSetFormat(nodemask, VIR_DOMAIN_CPUMASK_LEN);
+            mask = virBitmapFormat(nodemask);
         else
-            mask = virDomainCpuSetFormat(vm->def->numatune.memory.nodemask,
-                                         VIR_DOMAIN_CPUMASK_LEN);
+            mask = virBitmapFormat(vm->def->numatune.memory.nodemask);
         if (!mask) {
             virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                            _("failed to convert memory nodemask"));
@@ -513,8 +512,7 @@ int qemuSetupCgroupEmulatorPin(virCgroupPtr cgroup,
     int rc = 0;
     char *new_cpus = NULL;
 
-    new_cpus = virDomainCpuSetFormat(vcpupin->cpumask,
-                                     VIR_DOMAIN_CPUMASK_LEN);
+    new_cpus = virBitmapFormat(vcpupin->cpumask);
     if (!new_cpus) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                        _("failed to convert cpu mask"));
@@ -691,13 +689,17 @@ int qemuSetupCgroupForEmulator(struct qemud_driver *driver,
     }
 
     if (def->cputune.emulatorpin &&
-        qemuCgroupControllerActive(driver, VIR_CGROUP_CONTROLLER_CPUSET) &&
-        qemuSetupCgroupEmulatorPin(cgroup_emulator, def->cputune.emulatorpin) < 0)
-        goto cleanup;
+        qemuCgroupControllerActive(driver, VIR_CGROUP_CONTROLLER_CPUSET)) {
+        rc = qemuSetupCgroupEmulatorPin(cgroup_emulator,
+                                        def->cputune.emulatorpin);
+        if (rc < 0)
+            goto cleanup;
+    }
 
     if (period || quota) {
         if (qemuCgroupControllerActive(driver, VIR_CGROUP_CONTROLLER_CPU)) {
-            if (qemuSetupCgroupVcpuBW(cgroup_emulator, period, quota) < 0)
+            if ((rc = qemuSetupCgroupVcpuBW(cgroup_emulator, period,
+                                            quota)) < 0)
                 goto cleanup;
         }
     }

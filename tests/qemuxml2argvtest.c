@@ -78,7 +78,7 @@ typedef enum {
 
 static int testCompareXMLToArgvFiles(const char *xml,
                                      const char *cmdline,
-                                     virBitmapPtr extraFlags,
+                                     qemuCapsPtr extraFlags,
                                      const char *migrateFrom,
                                      int migrateFd,
                                      virQemuXML2ArgvTestFlags flags)
@@ -106,26 +106,6 @@ static int testCompareXMLToArgvFiles(const char *xml,
         goto out;
     }
 
-    /*
-     * For test purposes, we may want to fake emulator's output by providing
-     * our own script instead of a real emulator. For this to work we need to
-     * specify a relative path in <emulator/> element, which, however, is not
-     * allowed by RelaxNG schema for domain XML. To work around it we add an
-     * extra '/' at the beginning of relative emulator path so that it looks
-     * like, e.g., "/./qemu.sh" or "/../emulator/qemu.sh" instead of
-     * "./qemu.sh" or "../emulator/qemu.sh" respectively. The following code
-     * detects such paths, strips the extra '/' and makes the path absolute.
-     */
-    if (vmdef->emulator && STRPREFIX(vmdef->emulator, "/.")) {
-        if (!(emulator = strdup(vmdef->emulator + 1)))
-            goto out;
-        VIR_FREE(vmdef->emulator);
-        vmdef->emulator = NULL;
-        if (virAsprintf(&vmdef->emulator, "%s/qemuxml2argvdata/%s",
-                        abs_srcdir, emulator) < 0)
-            goto out;
-    }
-
     if (qemuCapsGet(extraFlags, QEMU_CAPS_DOMID))
         vmdef->id = 6;
     else
@@ -142,8 +122,12 @@ static int testCompareXMLToArgvFiles(const char *xml,
                     QEMU_CAPS_NO_ACPI,
                     QEMU_CAPS_LAST);
 
-    if (qemudCanonicalizeMachine(&driver, vmdef) < 0)
-        goto out;
+    if (STREQ(vmdef->os.machine, "pc") &&
+        STREQ(vmdef->emulator, "/usr/bin/qemu-system-x86_64")) {
+        VIR_FREE(vmdef->os.machine);
+        if (!(vmdef->os.machine = strdup("pc-0.11")))
+            goto out;
+    }
 
     if (qemuCapsGet(extraFlags, QEMU_CAPS_DEVICE)) {
         if (qemuDomainAssignAddresses(vmdef, extraFlags, NULL)) {
@@ -157,10 +141,6 @@ static int testCompareXMLToArgvFiles(const char *xml,
     VIR_FREE(log);
     virResetLastError();
 
-    /* We do not call qemuCapsExtractVersionInfo() before calling
-     * qemuBuildCommandLine(), so we should set QEMU_CAPS_PCI_MULTIBUS for
-     * x86_64 and i686 architectures here.
-     */
     if (STREQLEN(vmdef->os.arch, "x86_64", 6) ||
         STREQLEN(vmdef->os.arch, "i686", 4)) {
         qemuCapsSet(extraFlags, QEMU_CAPS_PCI_MULTIBUS);
@@ -235,7 +215,7 @@ out:
 
 struct testInfo {
     const char *name;
-    virBitmapPtr extraFlags;
+    qemuCapsPtr extraFlags;
     const char *migrateFrom;
     int migrateFd;
     unsigned int flags;
@@ -270,12 +250,40 @@ cleanup:
 }
 
 
+static int
+testAddCPUModels(qemuCapsPtr caps, bool skipLegacy)
+{
+    const char *newModels[] = {
+        "Opteron_G3", "Opteron_G2", "Opteron_G1",
+        "Nehalem", "Penryn", "Conroe",
+    };
+    const char *legacyModels[] = {
+        "n270", "athlon", "pentium3", "pentium2", "pentium",
+        "486", "coreduo", "kvm32", "qemu32", "kvm64",
+        "core2duo", "phenom", "qemu64",
+    };
+    size_t i;
+
+    for (i = 0 ; i < ARRAY_CARDINALITY(newModels) ; i++) {
+        if (qemuCapsAddCPUDefinition(caps, newModels[i]) < 0)
+            return -1;
+    }
+    if (skipLegacy)
+        return 0;
+    for (i = 0 ; i < ARRAY_CARDINALITY(legacyModels) ; i++) {
+        if (qemuCapsAddCPUDefinition(caps, legacyModels[i]) < 0)
+            return -1;
+    }
+    return 0;
+}
+
 
 static int
 mymain(void)
 {
     int ret = 0;
     char *map = NULL;
+    bool skipLegacyCPUs = false;
 
     abs_top_srcdir = getenv("abs_top_srcdir");
     if (!abs_top_srcdir)
@@ -307,11 +315,13 @@ mymain(void)
         };                                                              \
         if (!(info.extraFlags = qemuCapsNew()))                         \
             return EXIT_FAILURE;                                        \
+        if (testAddCPUModels(info.extraFlags, skipLegacyCPUs) < 0)      \
+            return EXIT_FAILURE;                                        \
         qemuCapsSetList(info.extraFlags, __VA_ARGS__, QEMU_CAPS_LAST);  \
         if (virtTestRun("QEMU XML-2-ARGV " name,                        \
                         1, testCompareXMLToArgvHelper, &info) < 0)      \
             ret = -1;                                                   \
-        qemuCapsFree(info.extraFlags);                                  \
+        virObjectUnref(info.extraFlags);                                \
     } while (0)
 
 # define DO_TEST(name, ...)                                             \
@@ -346,7 +356,10 @@ mymain(void)
     DO_TEST("minimal", QEMU_CAPS_NAME);
     DO_TEST("minimal-s390", QEMU_CAPS_NAME);
     DO_TEST("machine-aliases1", NONE);
-    DO_TEST_ERROR("machine-aliases2", NONE);
+    DO_TEST("machine-aliases2", QEMU_CAPS_KVM);
+    DO_TEST("machine-core-on", QEMU_CAPS_DUMP_GUEST_CORE);
+    DO_TEST("machine-core-off", QEMU_CAPS_DUMP_GUEST_CORE);
+    DO_TEST_FAILURE("machine-core-on", NONE);
     DO_TEST("boot-cdrom", NONE);
     DO_TEST("boot-network", NONE);
     DO_TEST("boot-floppy", NONE);
@@ -372,7 +385,12 @@ mymain(void)
             QEMU_CAPS_DEVICE, QEMU_CAPS_DRIVE, QEMU_CAPS_DRIVE_BOOT,
             QEMU_CAPS_BOOTINDEX,
             QEMU_CAPS_VIRTIO_BLK_SCSI, QEMU_CAPS_VIRTIO_BLK_SG_IO);
-    DO_TEST_ERROR("bootloader", QEMU_CAPS_DOMID);
+    DO_TEST("bootloader", QEMU_CAPS_DOMID, QEMU_CAPS_KVM);
+
+    DO_TEST("reboot-timeout-disabled", QEMU_CAPS_REBOOT_TIMEOUT);
+    DO_TEST("reboot-timeout-enabled", QEMU_CAPS_REBOOT_TIMEOUT);
+    DO_TEST_FAILURE("reboot-timeout-enabled", NONE);
+
     DO_TEST("bios", QEMU_CAPS_DEVICE, QEMU_CAPS_SGA);
     DO_TEST("clock-utc", NONE);
     DO_TEST("clock-localtime", NONE);
@@ -384,6 +402,12 @@ mymain(void)
     DO_TEST("cpu-kvmclock", QEMU_CAPS_ENABLE_KVM);
     DO_TEST("cpu-host-kvmclock", QEMU_CAPS_ENABLE_KVM, QEMU_CAPS_CPU_HOST);
     DO_TEST("kvmclock", QEMU_CAPS_KVM);
+
+    DO_TEST("cpu-eoi-disabled", QEMU_CAPS_ENABLE_KVM);
+    DO_TEST("cpu-eoi-enabled", QEMU_CAPS_ENABLE_KVM);
+    DO_TEST("eoi-disabled", NONE);
+    DO_TEST("eoi-enabled", NONE);
+    DO_TEST("kvmclock+eoi-disabled", QEMU_CAPS_ENABLE_KVM);
 
     DO_TEST("hugepages", QEMU_CAPS_MEM_PATH);
     DO_TEST("disk-cdrom", NONE);
@@ -466,6 +490,10 @@ mymain(void)
     DO_TEST("disk-scsi-disk-split",
             QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
             QEMU_CAPS_SCSI_CD, QEMU_CAPS_SCSI_LSI, QEMU_CAPS_VIRTIO_SCSI_PCI);
+    DO_TEST("disk-scsi-disk-wwn",
+            QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
+            QEMU_CAPS_SCSI_CD, QEMU_CAPS_SCSI_LSI, QEMU_CAPS_VIRTIO_SCSI_PCI,
+            QEMU_CAPS_SCSI_DISK_WWN);
     DO_TEST("disk-scsi-vscsi",
             QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG);
     DO_TEST("disk-scsi-virtio-scsi",
@@ -552,7 +580,7 @@ mymain(void)
 
     DO_TEST("input-usbmouse", NONE);
     DO_TEST("input-usbtablet", NONE);
-    DO_TEST_ERROR("input-xen", QEMU_CAPS_DOMID);
+    DO_TEST("input-xen", QEMU_CAPS_DOMID, QEMU_CAPS_KVM);
     DO_TEST("misc-acpi", NONE);
     DO_TEST("misc-disable-s3", QEMU_CAPS_DISABLE_S3);
     DO_TEST("misc-disable-suspends", QEMU_CAPS_DISABLE_S3, QEMU_CAPS_DISABLE_S4);
@@ -676,6 +704,12 @@ mymain(void)
             QEMU_CAPS_PCI_MULTIFUNCTION, QEMU_CAPS_USB_HUB,
             QEMU_CAPS_ICH9_USB_EHCI1, QEMU_CAPS_USB_REDIR,
             QEMU_CAPS_SPICE, QEMU_CAPS_CHARDEV_SPICEVMC);
+    DO_TEST("usb-redir-filter",
+            QEMU_CAPS_CHARDEV, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
+            QEMU_CAPS_PCI_MULTIFUNCTION, QEMU_CAPS_USB_HUB,
+            QEMU_CAPS_ICH9_USB_EHCI1, QEMU_CAPS_USB_REDIR,
+            QEMU_CAPS_SPICE, QEMU_CAPS_CHARDEV_SPICEVMC,
+            QEMU_CAPS_USB_REDIR_FILTER);
     DO_TEST("usb1-usb2",
             QEMU_CAPS_CHARDEV, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
             QEMU_CAPS_PCI_MULTIFUNCTION, QEMU_CAPS_PIIX3_USB_UHCI,
@@ -743,8 +777,10 @@ mymain(void)
     DO_TEST("cpu-numa1", NONE);
     DO_TEST("cpu-numa2", QEMU_CAPS_SMP_TOPOLOGY);
     DO_TEST("cpu-host-model", NONE);
+    skipLegacyCPUs = true;
     DO_TEST("cpu-host-model-fallback", NONE);
     DO_TEST_FAILURE("cpu-host-model-nofallback", NONE);
+    skipLegacyCPUs = false;
     DO_TEST("cpu-host-passthrough", QEMU_CAPS_KVM, QEMU_CAPS_CPU_HOST);
     DO_TEST_FAILURE("cpu-host-passthrough", NONE);
     DO_TEST_FAILURE("cpu-qemu-host-passthrough",
@@ -791,6 +827,9 @@ mymain(void)
     DO_TEST("disk-ide-drive-split",
             QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
             QEMU_CAPS_IDE_CD);
+    DO_TEST("disk-ide-wwn",
+            QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_IDE_CD,
+            QEMU_CAPS_DRIVE_SERIAL, QEMU_CAPS_IDE_DRIVE_WWN);
 
     DO_TEST("disk-geometry", QEMU_CAPS_DRIVE);
     DO_TEST("disk-blockio",

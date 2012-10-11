@@ -832,6 +832,10 @@ typedef int
     (*virDrvDomainBlockRebase)(virDomainPtr dom, const char *path,
                                const char *base, unsigned long bandwidth,
                                unsigned int flags);
+typedef int
+    (*virDrvDomainBlockCommit)(virDomainPtr dom, const char *disk,
+                               const char *base, const char *top,
+                               unsigned long bandwidth, unsigned int flags);
 
 typedef int
     (*virDrvSetKeepAlive)(virConnectPtr conn,
@@ -881,6 +885,18 @@ typedef char *
                                int type,
                                const char *uri,
                                unsigned int flags);
+
+typedef int
+    (*virDrvNodeGetMemoryParameters)(virConnectPtr conn,
+                                     virTypedParameterPtr params,
+                                     int *nparams,
+                                     unsigned int flags);
+
+typedef int
+    (*virDrvNodeSetMemoryParameters)(virConnectPtr conn,
+                                     virTypedParameterPtr params,
+                                     int nparams,
+                                     unsigned int flags);
 
 /**
  * _virDriver:
@@ -1059,6 +1075,7 @@ struct _virDriver {
     virDrvDomainBlockJobSetSpeed        domainBlockJobSetSpeed;
     virDrvDomainBlockPull               domainBlockPull;
     virDrvDomainBlockRebase             domainBlockRebase;
+    virDrvDomainBlockCommit             domainBlockCommit;
     virDrvSetKeepAlive                  setKeepAlive;
     virDrvConnectIsAlive                isAlive;
     virDrvNodeSuspendForDuration        nodeSuspendForDuration;
@@ -1068,6 +1085,8 @@ struct _virDriver {
     virDrvDomainGetDiskErrors           domainGetDiskErrors;
     virDrvDomainSetMetadata             domainSetMetadata;
     virDrvDomainGetMetadata             domainGetMetadata;
+    virDrvNodeGetMemoryParameters       nodeGetMemoryParameters;
+    virDrvNodeSetMemoryParameters       nodeSetMemoryParameters;
 };
 
 typedef int
@@ -1082,6 +1101,10 @@ typedef int
         (*virDrvListDefinedNetworks)    (virConnectPtr conn,
                                          char **const names,
                                          int maxnames);
+typedef int
+        (*virDrvListAllNetworks)        (virConnectPtr conn,
+                                         virNetworkPtr **nets,
+                                         unsigned int flags);
 typedef virNetworkPtr
         (*virDrvNetworkLookupByUUID)    (virConnectPtr conn,
                                          const unsigned char *uuid);
@@ -1096,6 +1119,13 @@ typedef virNetworkPtr
                                          const char *xml);
 typedef int
         (*virDrvNetworkUndefine)        (virNetworkPtr network);
+typedef int
+        (*virDrvNetworkUpdate)          (virNetworkPtr network,
+                                         unsigned int command, /* virNetworkUpdateCommand */
+                                         unsigned int section, /* virNetworkUpdateSection */
+                                         int parentIndex,
+                                         const char *xml,
+                                         unsigned int flags);
 typedef int
         (*virDrvNetworkCreate)          (virNetworkPtr network);
 typedef int
@@ -1140,11 +1170,13 @@ struct _virNetworkDriver {
         virDrvListNetworks          listNetworks;
         virDrvNumOfDefinedNetworks  numOfDefinedNetworks;
         virDrvListDefinedNetworks   listDefinedNetworks;
+        virDrvListAllNetworks       listAllNetworks;
         virDrvNetworkLookupByUUID   networkLookupByUUID;
         virDrvNetworkLookupByName   networkLookupByName;
         virDrvNetworkCreateXML      networkCreateXML;
         virDrvNetworkDefineXML      networkDefineXML;
         virDrvNetworkUndefine       networkUndefine;
+        virDrvNetworkUpdate         networkUpdate;
         virDrvNetworkCreate         networkCreate;
         virDrvNetworkDestroy        networkDestroy;
         virDrvNetworkGetXMLDesc     networkGetXMLDesc;
@@ -1168,6 +1200,10 @@ typedef int
         (*virDrvListDefinedInterfaces)  (virConnectPtr conn,
                                          char **const names,
                                          int maxnames);
+typedef int
+        (*virDrvListAllInterfaces)      (virConnectPtr conn,
+                                         virInterfacePtr **ifaces,
+                                         unsigned int flags);
 typedef virInterfacePtr
         (*virDrvInterfaceLookupByName)  (virConnectPtr conn,
                                          const char *name);
@@ -1226,6 +1262,7 @@ struct _virInterfaceDriver {
     virDrvListInterfaces             listInterfaces;
     virDrvNumOfDefinedInterfaces     numOfDefinedInterfaces;
     virDrvListDefinedInterfaces      listDefinedInterfaces;
+    virDrvListAllInterfaces          listAllInterfaces;
     virDrvInterfaceLookupByName      interfaceLookupByName;
     virDrvInterfaceLookupByMACString interfaceLookupByMACString;
     virDrvInterfaceGetXMLDesc        interfaceGetXMLDesc;
@@ -1473,6 +1510,9 @@ typedef int (*virDevMonListDevices)(virConnectPtr conn,
                                     char **const names,
                                     int maxnames,
                                     unsigned int flags);
+typedef int (*virDevMonListAllNodeDevices)(virConnectPtr conn,
+                                           virNodeDevicePtr **devices,
+                                           unsigned int flags);
 
 typedef virNodeDevicePtr (*virDevMonDeviceLookupByName)(virConnectPtr conn,
                                                         const char *name);
@@ -1506,6 +1546,7 @@ struct _virDeviceMonitor {
     virDrvClose                 close;
     virDevMonNumOfDevices       numOfDevices;
     virDevMonListDevices        listDevices;
+    virDevMonListAllNodeDevices listAllNodeDevices;
     virDevMonDeviceLookupByName deviceLookupByName;
     virDevMonDeviceGetXMLDesc   deviceGetXMLDesc;
     virDevMonDeviceGetParent    deviceGetParent;
@@ -1553,6 +1594,10 @@ typedef int
     (*virDrvListSecrets)               (virConnectPtr conn,
                                         char **uuids,
                                         int maxuuids);
+typedef int
+    (*virDrvListAllSecrets)            (virConnectPtr conn,
+                                        virSecretPtr **secrets,
+                                        unsigned int flags);
 
 typedef struct _virSecretDriver virSecretDriver;
 typedef virSecretDriver *virSecretDriverPtr;
@@ -1574,6 +1619,7 @@ struct _virSecretDriver {
 
     virDrvNumOfSecrets          numOfSecrets;
     virDrvListSecrets           listSecrets;
+    virDrvListAllSecrets        listAllSecrets;
     virDrvSecretLookupByUUID    lookupByUUID;
     virDrvSecretLookupByUsage   lookupByUsage;
     virDrvSecretDefineXML       defineXML;
@@ -1624,6 +1670,10 @@ typedef int
     (*virDrvConnectListNWFilters)         (virConnectPtr conn,
                                            char **const names,
                                            int maxnames);
+typedef int
+    (*virDrvConnectListAllNWFilters)      (virConnectPtr conn,
+                                           virNWFilterPtr **filters,
+                                           unsigned int flags);
 typedef virNWFilterPtr
     (*virDrvNWFilterLookupByName)         (virConnectPtr conn,
                                            const char *name);
@@ -1661,6 +1711,7 @@ struct _virNWFilterDriver {
 
     virDrvConnectNumOfNWFilters numOfNWFilters;
     virDrvConnectListNWFilters  listNWFilters;
+    virDrvConnectListAllNWFilters  listAllNWFilters;
     virDrvNWFilterLookupByName  nwfilterLookupByName;
     virDrvNWFilterLookupByUUID  nwfilterLookupByUUID;
     virDrvNWFilterDefineXML     defineXML;

@@ -74,9 +74,11 @@
       <li>Make sure your patches apply against libvirt GIT.  Developers
         only follow GIT and don't care much about released versions.</li>
       <li><p>Run the automated tests on your code before submitting any changes.
-          In particular, configure with compile warnings set to -Werror:</p>
+          In particular, configure with compile warnings set to
+          -Werror.  This is done automatically for a git checkout; from a
+          tarball, use:</p>
 <pre>
-  ./configure --enable-compile-warnings=error
+  ./configure --enable-werror
 </pre>
         <p>
           and run the tests:
@@ -350,7 +352,7 @@
   }
 </pre>
 
-    <h2><a href="types">Preprocessor</a></h2>
+    <h2><a name="preprocessor">Preprocessor</a></h2>
 
     <p>
       For variadic macros, stick with C99 syntax:
@@ -368,7 +370,7 @@
   #endif
 </pre>
 
-    <h2><a href="types">C types</a></h2>
+    <h2><a name="types">C types</a></h2>
 
     <p>
       Use the right type.

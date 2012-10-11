@@ -15,7 +15,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Author: Daniel P. Berrange <berrange@redhat.com>
@@ -36,6 +36,7 @@
 #include "virterror_internal.h"
 #include "virfile.h"
 #include "virpidfile.h"
+#include "virprocess.h"
 
 #define VIR_FROM_THIS VIR_FROM_QEMU
 
@@ -78,8 +79,8 @@
 # ifdef WITH_NETWORK
 #  include "network/bridge_driver.h"
 # endif
-# ifdef WITH_NETCF
-#  include "interface/netcf_driver.h"
+# ifdef WITH_INTERFACE
+#  include "interface/interface_driver.h"
 # endif
 # ifdef WITH_STORAGE
 #  include "storage/storage_driver.h"
@@ -196,7 +197,7 @@ static int daemonForkIntoBackground(const char *argv0)
             VIR_FORCE_CLOSE(statuspipe[1]);
 
             /* We wait to make sure the first child forked successfully */
-            if (virPidWait(pid, NULL) < 0)
+            if (virProcessWait(pid, NULL) < 0)
                 goto error;
 
             /* If we get here, then the grandchild was spawned, so we
@@ -382,7 +383,7 @@ static void daemonInitialize(void)
 # ifdef WITH_NWFILTER
     virDriverLoadModule("nwfilter");
 # endif
-# ifdef WITH_NETCF
+# ifdef WITH_INTERFACE
     virDriverLoadModule("interface");
 # endif
 # ifdef WITH_XEN
@@ -404,7 +405,7 @@ static void daemonInitialize(void)
 # ifdef WITH_NETWORK
     networkRegister();
 # endif
-# ifdef WITH_NETCF
+# ifdef WITH_INTERFACE
     interfaceRegister();
 # endif
 # ifdef WITH_STORAGE
@@ -635,7 +636,21 @@ daemonSetupLogging(struct daemonConfig *config,
         virLogParseOutputs(config->log_outputs);
 
     /*
-     * If no defined outputs, then direct to libvirtd.log when running
+     * If no defined outputs, then first try to direct it
+     * to the systemd journal (if it exists)....
+     */
+    if (virLogGetNbOutputs() == 0) {
+        char *tmp;
+        if (access("/run/systemd/journal/socket", W_OK) >= 0) {
+            if (virAsprintf(&tmp, "%d:journald", virLogGetDefaultPriority()) < 0)
+                goto no_memory;
+            virLogParseOutputs(tmp);
+            VIR_FREE(tmp);
+        }
+    }
+
+    /*
+     * otherwise direct to libvirtd.log when running
      * as daemon. Otherwise the default output is stderr.
      */
     if (virLogGetNbOutputs() == 0) {
@@ -974,9 +989,6 @@ int main(int argc, char **argv) {
         fprintf(stderr, _("%s: initialization failed\n"), argv[0]);
         exit(EXIT_FAILURE);
     }
-
-    /* initialize early logging */
-    virLogSetFromEnv();
 
     if (strstr(argv[0], "lt-libvirtd") ||
         strstr(argv[0], "/daemon/.libs/libvirtd")) {

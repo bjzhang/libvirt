@@ -92,7 +92,8 @@ test_programs = virshtest sockettest \
 	viratomictest \
 	utiltest virnettlscontexttest shunloadtest \
 	virtimetest viruritest virkeyfiletest \
-	virauthconfigtest
+	virauthconfigtest \
+	virbitmaptest
 
 if WITH_SECDRIVER_SELINUX
 test_programs += securityselinuxtest
@@ -182,12 +183,13 @@ test_scripts +=				\
 	read-bufsiz			\
 	read-non-seekable		\
 	start				\
-	undefine			\
 	vcpupin				\
 	virsh-all			\
 	virsh-optparse			\
 	virsh-schedinfo			\
-	virsh-synopsis
+	virsh-synopsis			\
+	virsh-undefine			\
+	$(NULL)
 
 test_programs += 			\
 	eventtest			\
@@ -203,12 +205,13 @@ EXTRA_DIST += 				\
 	read-bufsiz			\
 	read-non-seekable		\
 	start				\
-	undefine			\
 	vcpupin				\
 	virsh-all			\
 	virsh-optparse			\
 	virsh-schedinfo			\
-	virsh-synopsis
+	virsh-synopsis			\
+	virsh-undefine			\
+	$(NULL)
 endif
 
 if WITH_SECDRIVER_APPARMOR
@@ -586,6 +589,10 @@ virhashtest_LDADD = $(LDADDS)
 viratomictest_SOURCES = \
 	viratomictest.c testutils.h testutils.c
 viratomictest_LDADD = $(LDADDS)
+
+virbitmaptest_SOURCES = \
+	virbitmaptest.c testutils.h testutils.c
+virbitmaptest_LDADD = $(LDADDS)
 
 jsontest_SOURCES = \
 	jsontest.c testutils.h testutils.c

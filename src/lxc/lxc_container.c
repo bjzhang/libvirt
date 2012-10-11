@@ -19,7 +19,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  */
 
@@ -63,6 +63,7 @@
 #include "virfile.h"
 #include "command.h"
 #include "virnetdev.h"
+#include "virprocess.h"
 
 #define VIR_FROM_THIS VIR_FROM_LXC
 
@@ -163,7 +164,7 @@ int lxcContainerHasReboot(void)
         virReportSystemError(errno, "%s",
                              _("Unable to clone to check reboot support"));
         return -1;
-    } else if (virPidWait(cpid, &status) < 0) {
+    } else if (virProcessWait(cpid, &status) < 0) {
         return -1;
     }
 
@@ -556,8 +557,9 @@ static int lxcContainerMountBasicFS(bool pivotRoot,
                   srcpath, mnts[i].dst, mnts[i].type, mnts[i].mflags, mnts[i].opts);
         if (mount(srcpath, mnts[i].dst, mnts[i].type, mnts[i].mflags, mnts[i].opts) < 0) {
             virReportSystemError(errno,
-                                 _("Failed to mount %s on %s type %s"),
-                                 mnts[i].src, mnts[i].dst, NULLSTR(mnts[i].type));
+                                 _("Failed to mount %s on %s type %s flags=%x opts=%s"),
+                                 srcpath, mnts[i].dst, NULLSTR(mnts[i].type),
+                                 mnts[i].mflags, NULLSTR(mnts[i].opts));
             goto cleanup;
         }
     }
@@ -579,8 +581,8 @@ static int lxcContainerMountBasicFS(bool pivotRoot,
                   MS_NOSUID, opts);
         if (mount("devfs", "/dev", "tmpfs", MS_NOSUID, opts) < 0) {
             virReportSystemError(errno,
-                                 _("Failed to mount %s on %s type %s"),
-                                 "devfs", "/dev", "tmpfs");
+                                 _("Failed to mount %s on %s type %s (%s)"),
+                                 "devfs", "/dev", "tmpfs", opts);
             goto cleanup;
         }
     }
@@ -1190,6 +1192,8 @@ static int lxcContainerGetSubtree(const char *prefix,
     char **mounts = NULL;
     size_t nmounts = 0;
 
+    VIR_DEBUG("prefix=%s", prefix);
+
     *mountsret = NULL;
     *nmountsret = 0;
 
@@ -1523,6 +1527,15 @@ static int lxcContainerSetupPivotRoot(virDomainDefPtr vmDef,
     if (lxcContainerPivotRoot(root) < 0)
         goto cleanup;
 
+#if HAVE_SELINUX
+    /* Some versions of Linux kernel don't let you overmount
+     * the selinux filesystem, so make sure we kill it first
+     */
+    if (STREQ(root->src, "/") &&
+        lxcContainerUnmountSubtree(SELINUX_MOUNT, false) < 0)
+        goto cleanup;
+#endif
+
     /* If we have the root source being '/', then we need to
      * get rid of any existing stuff under /proc, /sys & /tmp.
      * We need new namespace aware versions of those. We must
@@ -1607,6 +1620,14 @@ static int lxcContainerSetupExtraMounts(virDomainDefPtr vmDef,
      * cgroups controllers that are mounted */
     if (lxcContainerIdentifyCGroups(&mounts, &nmounts, &cgroupRoot) < 0)
         return -1;
+
+#if HAVE_SELINUX
+    /* Some versions of Linux kernel don't let you overmount
+     * the selinux filesystem, so make sure we kill it first
+     */
+    if (lxcContainerUnmountSubtree(SELINUX_MOUNT, false) < 0)
+        goto cleanup;
+#endif
 
     /* Gets rid of any existing stuff under /proc, since we need new
      * namespace aware versions of those. We must do /proc second
@@ -1981,7 +2002,7 @@ int lxcContainerAvailable(int features)
         VIR_DEBUG("clone call returned %s, container support is not enabled",
                   virStrerror(errno, ebuf, sizeof(ebuf)));
         return -1;
-    } else if (virPidWait(cpid, NULL) < 0) {
+    } else if (virProcessWait(cpid, NULL) < 0) {
         return -1;
     }
 

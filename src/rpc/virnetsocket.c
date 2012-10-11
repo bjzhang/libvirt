@@ -15,7 +15,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Author: Daniel P. Berrange <berrange@redhat.com>
@@ -44,6 +44,7 @@
 #include "virfile.h"
 #include "event.h"
 #include "threads.h"
+#include "virprocess.h"
 
 #include "passfd.h"
 
@@ -914,7 +915,7 @@ void virNetSocketDispose(void *obj)
     VIR_FORCE_CLOSE(sock->fd);
     VIR_FORCE_CLOSE(sock->errfd);
 
-    virPidAbort(sock->pid);
+    virProcessAbort(sock->pid);
 
     VIR_FREE(sock->localAddrStr);
     VIR_FREE(sock->remoteAddrStr);

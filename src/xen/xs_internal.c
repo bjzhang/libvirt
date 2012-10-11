@@ -14,7 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Daniel Veillard <veillard@redhat.com>
@@ -35,7 +35,11 @@
 #include <xen/dom0_ops.h>
 #include <xen/version.h>
 
-#include <xs.h>
+#if HAVE_XENSTORE_H
+# include <xenstore.h>
+#else
+# include <xs.h>
+#endif
 
 #include "virterror_internal.h"
 #include "datatypes.h"

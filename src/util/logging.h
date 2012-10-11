@@ -14,7 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  */
@@ -31,8 +31,8 @@
  * defined at runtime from the libvirt daemon configuration file
  */
 # ifdef ENABLE_DEBUG
-#  define VIR_DEBUG_INT(category, f, l, ...)                            \
-    virLogMessage(category, VIR_LOG_DEBUG, f, l, 0, __VA_ARGS__)
+#  define VIR_DEBUG_INT(src, filename, linenr, funcname, ...)           \
+    virLogMessage(src, VIR_LOG_DEBUG, filename, linenr, funcname, __VA_ARGS__)
 # else
 /**
  * virLogEatParams:
@@ -44,25 +44,25 @@ static inline void virLogEatParams(const char *unused, ...)
     /* Silence gcc */
     unused = unused;
 }
-#  define VIR_DEBUG_INT(category, f, l, ...)    \
-    virLogEatParams(category, f, l, __VA_ARGS__)
+#  define VIR_DEBUG_INT(src, filename, linenr, funcname, ...)           \
+    virLogEatParams(src, filename, linenr, funcname, __VA_ARGS__)
 # endif /* !ENABLE_DEBUG */
 
-# define VIR_INFO_INT(category, f, l, ...)                              \
-    virLogMessage(category, VIR_LOG_INFO, f, l, 0, __VA_ARGS__)
-# define VIR_WARN_INT(category, f, l, ...)                              \
-    virLogMessage(category, VIR_LOG_WARN, f, l, 0, __VA_ARGS__)
-# define VIR_ERROR_INT(category, f, l, ...)                             \
-    virLogMessage(category, VIR_LOG_ERROR, f, l, 0, __VA_ARGS__)
+# define VIR_INFO_INT(src, filename, linenr, funcname, ...)             \
+    virLogMessage(src, VIR_LOG_INFO, filename, linenr, funcname, __VA_ARGS__)
+# define VIR_WARN_INT(src, filename, linenr, funcname, ...)             \
+    virLogMessage(src, VIR_LOG_WARN, filename, linenr, funcname, __VA_ARGS__)
+# define VIR_ERROR_INT(src, filename, linenr, funcname, ...)            \
+    virLogMessage(src, VIR_LOG_ERROR, filename, linenr, funcname, __VA_ARGS__)
 
 # define VIR_DEBUG(...)                                                 \
-        VIR_DEBUG_INT("file." __FILE__, __func__, __LINE__, __VA_ARGS__)
+    VIR_DEBUG_INT(VIR_LOG_FROM_FILE, __FILE__, __LINE__, __func__, __VA_ARGS__)
 # define VIR_INFO(...)                                                  \
-        VIR_INFO_INT("file." __FILE__, __func__, __LINE__, __VA_ARGS__)
+    VIR_INFO_INT(VIR_LOG_FROM_FILE, __FILE__, __LINE__, __func__, __VA_ARGS__)
 # define VIR_WARN(...)                                                  \
-        VIR_WARN_INT("file." __FILE__, __func__, __LINE__, __VA_ARGS__)
+    VIR_WARN_INT(VIR_LOG_FROM_FILE, __FILE__, __LINE__, __func__, __VA_ARGS__)
 # define VIR_ERROR(...)                                                 \
-        VIR_ERROR_INT("file." __FILE__, __func__, __LINE__, __VA_ARGS__)
+    VIR_ERROR_INT(VIR_LOG_FROM_FILE, __FILE__, __LINE__, __func__, __VA_ARGS__)
 
 /*
  * To be made public
@@ -80,29 +80,44 @@ typedef enum {
     VIR_LOG_TO_STDERR = 1,
     VIR_LOG_TO_SYSLOG,
     VIR_LOG_TO_FILE,
+    VIR_LOG_TO_JOURNALD,
 } virLogDestination;
+
+typedef enum {
+    VIR_LOG_FROM_FILE,
+    VIR_LOG_FROM_ERROR,
+    VIR_LOG_FROM_AUDIT,
+    VIR_LOG_FROM_TRACE,
+    VIR_LOG_FROM_LIBRARY,
+
+    VIR_LOG_FROM_LAST,
+} virLogSource;
 
 /**
  * virLogOutputFunc:
- * @category: the category for the message
+ * @src: the src for the message
  * @priority: the priority for the message
- * @funcname: the function emitting the message
+ * @filename: file where the message was emitted
  * @linenr: line where the message was emitted
+ * @funcname: the function emitting the message
  * @timestamp: zero terminated string with timestamp of the message
  * @flags: flags associated with the message
+ * @rawstr: the unformatted message to log, zero terminated
  * @str: the message to log, preformatted and zero terminated
  * @data: extra output logging data
  *
  * Callback function used to output messages
- *
- * Returns the number of bytes written or -1 in case of error
  */
-typedef int (*virLogOutputFunc) (const char *category, int priority,
-                                 const char *funcname, long long linenr,
-                                 const char *timestamp,
-                                 unsigned int flags,
-                                 const char *str,
-                                 void *data);
+typedef void (*virLogOutputFunc) (virLogSource src,
+                                  virLogPriority priority,
+                                  const char *filename,
+                                  int linenr,
+                                  const char *funcname,
+                                  const char *timestamp,
+                                  unsigned int flags,
+                                  const char *rawstr,
+                                  const char *str,
+                                  void *data);
 
 /**
  * virLogCloseFunc:
@@ -120,13 +135,18 @@ extern int virLogGetNbFilters(void);
 extern int virLogGetNbOutputs(void);
 extern char *virLogGetFilters(void);
 extern char *virLogGetOutputs(void);
-extern int virLogGetDefaultPriority(void);
-extern int virLogSetDefaultPriority(int priority);
+extern virLogPriority virLogGetDefaultPriority(void);
+extern int virLogSetDefaultPriority(virLogPriority priority);
 extern void virLogSetFromEnv(void);
-extern int virLogDefineFilter(const char *match, int priority,
+extern int virLogDefineFilter(const char *match,
+                              virLogPriority priority,
                               unsigned int flags);
-extern int virLogDefineOutput(virLogOutputFunc f, virLogCloseFunc c, void *data,
-                              int priority, int dest, const char *name,
+extern int virLogDefineOutput(virLogOutputFunc f,
+                              virLogCloseFunc c,
+                              void *data,
+                              virLogPriority priority,
+                              virLogDestination dest,
+                              const char *name,
                               unsigned int flags);
 
 /*
@@ -139,13 +159,17 @@ extern int virLogReset(void);
 extern int virLogParseDefaultPriority(const char *priority);
 extern int virLogParseFilters(const char *filters);
 extern int virLogParseOutputs(const char *output);
-extern void virLogMessage(const char *category, int priority,
-                          const char *funcname, long long linenr,
-                          unsigned int flags,
+extern void virLogMessage(virLogSource src,
+                          virLogPriority priority,
+                          const char *filename,
+                          int linenr,
+                          const char *funcname,
                           const char *fmt, ...) ATTRIBUTE_FMT_PRINTF(6, 7);
-extern void virLogVMessage(const char *category, int priority,
-                           const char *funcname, long long linenr,
-                           unsigned int flags,
+extern void virLogVMessage(virLogSource src,
+                           virLogPriority priority,
+                           const char *filename,
+                           int linenr,
+                           const char *funcname,
                            const char *fmt,
                            va_list vargs) ATTRIBUTE_FMT_PRINTF(6, 0);
 extern int virLogSetBufferSize(int size);

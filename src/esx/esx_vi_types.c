@@ -16,7 +16,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  */
@@ -212,8 +212,10 @@
     {                                                                         \
         if (anyType->type != esxVI_Type_##_type) {                            \
             virReportError(VIR_ERR_INTERNAL_ERROR,                            \
-                           _("Call to %s for unexpected type '%s'"),          \
-                           __FUNCTION__, anyType->other);                     \
+                           _("Call to %s for unexpected type '%s', "          \
+                             "expected '%s'"),                                \
+                           __FUNCTION__, anyType->other,                      \
+                           esxVI_Type_ToString(esxVI_Type_##_type));          \
             return -1;                                                        \
         }                                                                     \
     }, /* nothing */)
@@ -225,8 +227,10 @@
     {                                                                         \
         if (anyType->type != esxVI_Type_##_type) {                            \
             virReportError(VIR_ERR_INTERNAL_ERROR,                            \
-                           _("Call to %s for unexpected type '%s'"),          \
-                           __FUNCTION__, anyType->other);                     \
+                           _("Call to %s for unexpected type '%s', "          \
+                             "expected '%s'"),                                \
+                           __FUNCTION__, anyType->other,                      \
+                           esxVI_Type_ToString(esxVI_Type_##_type));          \
             return -1;                                                        \
         }                                                                     \
     }, Value)

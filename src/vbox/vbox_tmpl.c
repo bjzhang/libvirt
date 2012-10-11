@@ -3752,8 +3752,9 @@ static int vboxDomainCreateWithFlags(virDomainPtr dom, unsigned int flags) {
                     ret = vboxStartMachine(dom, i, machine, &iid);
                 } else {
                     virReportError(VIR_ERR_OPERATION_FAILED, "%s",
-                                   _("machine is not in poweroff|saved|"
-                                     "aborted state, so couldn't start it"));
+                                   _("machine is not in "
+                                     "poweroff|saved|aborted state, so "
+                                     "couldn't start it"));
                     ret = -1;
                 }
             }
@@ -3785,7 +3786,7 @@ vboxSetBootDeviceOrder(virDomainDefPtr def, vboxGlobalData *data,
     VIR_DEBUG("def->os.type             %s", def->os.type);
     VIR_DEBUG("def->os.arch             %s", def->os.arch);
     VIR_DEBUG("def->os.machine          %s", def->os.machine);
-    VIR_DEBUG("def->os.nBootDevs        %d", def->os.nBootDevs);
+    VIR_DEBUG("def->os.nBootDevs        %zu", def->os.nBootDevs);
     VIR_DEBUG("def->os.bootDevs[0]      %d", def->os.bootDevs[0]);
     VIR_DEBUG("def->os.bootDevs[1]      %d", def->os.bootDevs[1]);
     VIR_DEBUG("def->os.bootDevs[2]      %d", def->os.bootDevs[2]);
@@ -4280,8 +4281,9 @@ vboxAttachDrives(virDomainDefPtr def, vboxGlobalData *data, IMachine *machine)
                                       &devicePort,
                                       &deviceSlot)) {
                 virReportError(VIR_ERR_INTERNAL_ERROR,
-                               _("can't get the port/slot number of harddisk/"
-                                 "dvd/floppy to be attached: %s, rc=%08x"),
+                               _("can't get the port/slot number of "
+                                 "harddisk/dvd/floppy to be attached: "
+                                 "%s, rc=%08x"),
                                def->disks[i]->src, (unsigned)rc);
                 VBOX_RELEASE(medium);
                 VBOX_UTF16_FREE(mediumUUID);
@@ -4303,8 +4305,8 @@ vboxAttachDrives(virDomainDefPtr def, vboxGlobalData *data, IMachine *machine)
 
             if (NS_FAILED(rc)) {
                 virReportError(VIR_ERR_INTERNAL_ERROR,
-                               _("could not attach the file as harddisk/"
-                                 "dvd/floppy: %s, rc=%08x"),
+                               _("could not attach the file as "
+                                 "harddisk/dvd/floppy: %s, rc=%08x"),
                                def->disks[i]->src, (unsigned)rc);
             } else {
                 DEBUGIID("Attached HDD/DVD/Floppy with UUID", mediumUUID);
@@ -4374,7 +4376,7 @@ vboxAttachNetwork(virDomainDefPtr def, vboxGlobalData *data, IMachine *machine)
         systemProperties = NULL;
     }
 
-    VIR_DEBUG("Number of Network Cards to be connected: %d", def->nnets);
+    VIR_DEBUG("Number of Network Cards to be connected: %zu", def->nnets);
     VIR_DEBUG("Number of Network Cards available: %d", networkAdapterCount);
 
     for (i = 0; (i < def->nnets) && (i < networkAdapterCount); i++) {
@@ -4536,7 +4538,7 @@ vboxAttachSerial(virDomainDefPtr def, vboxGlobalData *data, IMachine *machine)
         systemProperties = NULL;
     }
 
-    VIR_DEBUG("Number of Serial Ports to be connected: %d", def->nserials);
+    VIR_DEBUG("Number of Serial Ports to be connected: %zu", def->nserials);
     VIR_DEBUG("Number of Serial Ports available: %d", serialPortCount);
     for (i = 0; (i < def->nserials) && (i < serialPortCount); i++) {
         ISerialPort *serialPort = NULL;
@@ -4615,7 +4617,7 @@ vboxAttachParallel(virDomainDefPtr def, vboxGlobalData *data, IMachine *machine)
         systemProperties = NULL;
     }
 
-    VIR_DEBUG("Number of Parallel Ports to be connected: %d", def->nparallels);
+    VIR_DEBUG("Number of Parallel Ports to be connected: %zu", def->nparallels);
     VIR_DEBUG("Number of Parallel Ports available: %d", parallelPortCount);
     for (i = 0; (i < def->nparallels) && (i < parallelPortCount); i++) {
         IParallelPort *parallelPort = NULL;

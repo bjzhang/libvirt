@@ -3,7 +3,7 @@ dnl Process this file with autoconf to produce a configure script.
 dnl Copyright (C) 2005-2012 Red Hat, Inc.
 dnl See COPYING.LIB for the License of this software
 
-AC_INIT([libvirt], [0.10.1], [libvir-list@redhat.com], [], [http://libvirt.org])
+AC_INIT([libvirt], [0.10.2], [libvir-list@redhat.com], [], [http://libvirt.org])
 AC_CONFIG_SRCDIR([src/libvirt.c])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_HEADERS([config.h])
@@ -187,6 +187,8 @@ dnl Availability of various common headers (non-fatal if missing).
 AC_CHECK_HEADERS([pwd.h paths.h regex.h sys/un.h \
   sys/poll.h syslog.h mntent.h net/ethernet.h linux/magic.h \
   sys/un.h sys/syscall.h netinet/tcp.h ifaddrs.h libtasn1.h])
+dnl Check whether endian provides handy macros.
+AC_CHECK_DECLS([htole64], [], [], [[#include <endian.h>]])
 
 dnl We need to decide at configure time if libvirt will use real atomic
 dnl operations ("lock free") or emulated ones with a mutex.
@@ -768,6 +770,8 @@ if test "$with_xen" != "no" ; then
 fi
 
 if test "$with_xen" != "no" ; then
+    dnl In Xen 4.2, xs.h is deprecated in favor of xenstore.h.
+    AC_CHECK_HEADERS([xenstore.h])
     AC_CHECK_HEADERS([xen/xen.h xen/version.h xen/dom0_ops.h],,[
        if test "$with_xen" = "yes"; then
            fail=1
@@ -1247,7 +1251,7 @@ if test "$with_dbus" = "yes" ; then
   LIBS="$save_LIBS"
   CFLAGS="$save_CFLAGS"
 fi
-AM_CONDITIONAL([HAVE_DBUS], [test "$have_dbus" = "yes"])
+AM_CONDITIONAL([HAVE_DBUS], [test "$with_dbus" = "yes"])
 
 
 dnl PolicyKit library
@@ -1453,9 +1457,8 @@ fi
 if test "$with_selinux" = "yes"; then
   AC_MSG_CHECKING([SELinux mount point])
   if test "$with_selinux_mount" = "check" || test -z "$with_selinux_mount"; then
-    if test -d /sys/fs/selinux ; then
-      SELINUX_MOUNT=/sys/fs/selinux
-    else
+    SELINUX_MOUNT=/sys/fs/selinux
+    if ! test -d ${SELINUX_MOUNT} && test -d /selinux ; then
       SELINUX_MOUNT=/selinux
     fi
   else
@@ -2296,9 +2299,12 @@ dnl
 
 LIBCURL_CFLAGS=""
 LIBCURL_LIBS=""
+have_curl=no
 
 if test "$with_esx" = "yes" || test "$with_esx" = "check" || test "$with_xenapi" = "yes" || test "$with_xenapi" = "check"; then
     PKG_CHECK_MODULES(LIBCURL, libcurl >= $LIBCURL_REQUIRED, [
+        have_curl=yes
+
         if test "$with_esx" = "check"; then
             with_esx=yes
         fi
@@ -2322,6 +2328,11 @@ if test "$with_esx" = "yes" || test "$with_esx" = "check" || test "$with_xenapi"
         fi
     ])
 fi
+
+if test "$have_curl" = "yes" ; then
+    AC_DEFINE_UNQUOTED([HAVE_LIBCURL], 1, [whether libcurl is available])
+fi
+AM_CONDITIONAL([HAVE_LIBCURL], [test "$have_curl" = "yes"])
 
 
 if test "$with_esx" = "yes" ; then
@@ -2787,6 +2798,30 @@ if test "$with_nwfilter" = "yes" ; then
 fi
 AM_CONDITIONAL([WITH_NWFILTER], [test "$with_nwfilter" = "yes"])
 
+dnl check if the interface driver should be compiled
+AC_ARG_WITH([interface],
+  AC_HELP_STRING([--with-interface],
+    [with host interface driver @<:@default=check@:>@]), [],
+    [with_interface=check])
+
+dnl Don't compile the interface driver without libvirtd
+if test "$with_libvirtd" = "no" ; then
+  with_interface=no
+fi
+
+dnl The interface driver depends on the netcf library or udev library
+case $with_interface:$with_netcf:$with_udev in
+    check:*yes*) with_interface=yes ;;
+    check:no:no) with_interface=no ;;
+    yes:no:no) AC_MSG_ERROR([Requested the Interface driver without netcf or udev support]) ;;
+esac
+
+if test "$with_interface" = "yes" ; then
+  AC_DEFINE_UNQUOTED([WITH_INTERFACE], [1],
+    [whether the interface driver is enabled])
+fi
+AM_CONDITIONAL([WITH_INTERFACE], [test "$with_interface" = "yes"])
+
 dnl libblkid is used by several storage drivers; therefore we probe
 dnl for it unconditionally.
 AC_ARG_WITH([libblkid],
@@ -2895,21 +2930,35 @@ AM_CONDITIONAL([WITH_VIRTUALPORT], [test "$with_virtualport" = "yes"])
 
 dnl netlink library
 
-LIBNL_ROUTE3_CFLAGS=""
-LIBNL_ROUTE3_LIBS=""
-LIBNL_CFLAGS=""
-LIBNL_LIBS=""
 have_libnl=no
 
 if test "$with_linux" = "yes"; then
-    PKG_CHECK_MODULES([LIBNL], [libnl-3.0], [
-        have_libnl=yes
-        AC_DEFINE([HAVE_LIBNL3], [1], [Use libnl-3.0])
-        AC_DEFINE([HAVE_LIBNL], [1], [whether the netlink library is available])
-        PKG_CHECK_MODULES([LIBNL_ROUTE3], [libnl-route-3.0])
-        LIBNL_CFLAGS="$LIBNL_CFLAGS $LIBNL_ROUTE3_CFLAGS"
-        LIBNL_LIBS="$LIBNL_LIBS $LIBNL_ROUTE3_LIBS"
-    ], [PKG_CHECK_MODULES([LIBNL], [libnl-1 >= $LIBNL_REQUIRED], [
+    # When linking with netcf, we must ensure that we pick the same version
+    # of libnl that netcf picked.  Prefer libnl-3 unless we can prove
+    # netcf linked against libnl-1, or unless the user set LIBNL_CFLAGS.
+    # (Setting LIBNL_CFLAGS is already used by PKG_CHECK_MODULES to
+    # override any probing, so if it set, you know which libnl is in use.)
+    libnl_ldd=
+    for dir in /usr/lib64 /usr/lib /usr/lib/*-linux-gnu*; do
+        if test -f $dir/libnetcf.so; then
+            libnl_ldd=`(ldd $dir/libnetcf.so) 2>&1`
+            break
+        fi
+    done
+    case $libnl_ldd:${LIBNL_CFLAGS+set} in
+        *libnl.so.1*:) ;;
+        *)
+        PKG_CHECK_MODULES([LIBNL], [libnl-3.0], [
+            have_libnl=yes
+            AC_DEFINE([HAVE_LIBNL3], [1], [Use libnl-3.0])
+            AC_DEFINE([HAVE_LIBNL], [1], [whether the netlink library is available])
+            PKG_CHECK_MODULES([LIBNL_ROUTE3], [libnl-route-3.0])
+            LIBNL_CFLAGS="$LIBNL_CFLAGS $LIBNL_ROUTE3_CFLAGS"
+            LIBNL_LIBS="$LIBNL_LIBS $LIBNL_ROUTE3_LIBS"
+        ], [:]) ;;
+    esac
+    if test "$have_libnl" = no; then
+        PKG_CHECK_MODULES([LIBNL], [libnl-1 >= $LIBNL_REQUIRED], [
             have_libnl=yes
             AC_DEFINE_UNQUOTED([HAVE_LIBNL], [1],
              [whether the netlink library is available])
@@ -2920,7 +2969,7 @@ if test "$with_linux" = "yes"; then
                 AC_MSG_ERROR([libnl-devel >= $LIBNL_REQUIRED is required for macvtap support])
             fi
         ])
-    ])
+    fi
 fi
 AM_CONDITIONAL([HAVE_LIBNL], [test "$have_libnl" = "yes"])
 
@@ -2954,6 +3003,8 @@ AC_DEFINE_UNQUOTED([isbase64],[libvirt_gl_isbase64],[Hack to avoid symbol clash]
 AC_DEFINE_UNQUOTED([base64_encode],[libvirt_gl_base64_encode],[Hack to avoid symbol clash])
 AC_DEFINE_UNQUOTED([base64_encode_alloc],[libvirt_gl_base64_encode_alloc],[Hack to avoid symbol clash])
 
+AC_CONFIG_FILES([run],
+                [chmod +x,-w run])
 AC_OUTPUT(Makefile src/Makefile include/Makefile docs/Makefile \
 	  docs/schemas/Makefile \
 	  gnulib/lib/Makefile \
@@ -2998,7 +3049,7 @@ AC_MSG_NOTICE([     Test: $with_test])
 AC_MSG_NOTICE([   Remote: $with_remote])
 AC_MSG_NOTICE([  Network: $with_network])
 AC_MSG_NOTICE([ Libvirtd: $with_libvirtd])
-AC_MSG_NOTICE([    netcf: $with_netcf])
+AC_MSG_NOTICE([Interface: $with_interface])
 AC_MSG_NOTICE([  macvtap: $with_macvtap])
 AC_MSG_NOTICE([ virtport: $with_virtualport])
 AC_MSG_NOTICE([])
@@ -3032,7 +3083,7 @@ AC_MSG_NOTICE([Libraries])
 AC_MSG_NOTICE([])
 AC_MSG_NOTICE([  libxml: $LIBXML_CFLAGS $LIBXML_LIBS])
 AC_MSG_NOTICE([  dlopen: $DLOPEN_LIBS])
-if test "$with_esx" = "yes" ; then
+if test "$have_curl" = "yes" ; then
 AC_MSG_NOTICE([ libcurl: $LIBCURL_CFLAGS $LIBCURL_LIBS])
 else
 AC_MSG_NOTICE([ libcurl: no])

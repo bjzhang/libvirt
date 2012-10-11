@@ -597,6 +597,15 @@ sc_prohibit_useless_translation:
 	halt='no translations in tests or examples'			\
 	  $(_sc_search_regexp)
 
+# When splitting a diagnostic across lines, ensure that there is a space
+# or \n on one side of the split.
+sc_require_whitespace_in_translation:
+	@grep -n -A1 '"$$' $$($(VC_LIST_EXCEPT))   			\
+	   | sed -ne ':l; /"$$/ {N;b l;}; s/"\n[^"]*"/""/g; s/\\n/ /g'	\
+		-e '/_(.*[^\ ]""[^\ ]/p' | grep . &&			\
+	  { echo '$(ME): missing whitespace at line split' 1>&2;	\
+	    exit 1; } || :
+
 # Enforce recommended preprocessor indentation style.
 sc_preprocessor_indentation:
 	@if cppi --version >/dev/null 2>&1; then			\
@@ -689,7 +698,18 @@ ifeq (0,$(MAKELEVEL))
       stamp="$$($(_submodule_hash) $(_curr_status) 2>/dev/null)";	\
       test "$$stamp" = "$$actual"; echo $$?)
   _clean_requested = $(filter %clean,$(MAKECMDGOALS))
+  ifeq (1,$(_update_required)$(_clean_requested))
+    $(info INFO: gnulib update required; running ./autogen.sh first)
+maint.mk Makefile: _autogen
+  endif
 endif
+
+# It is necessary to call autogen any time gnulib changes.  Autogen
+# reruns configure, then we regenerate all Makefiles at once.
+.PHONY: _autogen
+_autogen:
+	$(srcdir)/autogen.sh
+	./config.status
 
 # Give credit where due:
 # Ensure that each commit author email address (possibly mapped via
@@ -704,13 +724,6 @@ sc_check_author_list:
 	test $$fail = 1							\
 	  && echo '$(ME): committer(s) not listed in AUTHORS' >&2;	\
 	test $$fail = 0
-
-# It is necessary to call autogen any time gnulib changes.  Autogen
-# reruns configure, then we regenerate all Makefiles at once.
-.PHONY: _autogen
-_autogen:
-	$(srcdir)/autogen.sh
-	./config.status
 
 # regenerate HACKING as part of the syntax-check
 syntax-check: $(top_srcdir)/HACKING
@@ -776,7 +789,7 @@ exclude_file_name_regexp--sc_prohibit_newline_at_end_of_diagnostic = \
   ^src/rpc/gendispatch\.pl$$
 
 exclude_file_name_regexp--sc_prohibit_nonreentrant = \
-  ^((po|tests)/|docs/.*py$$)
+  ^((po|tests)/|docs/.*py|run.in$$)
 
 exclude_file_name_regexp--sc_prohibit_raw_allocation = \
   ^(src/util/memory\.[ch]|examples/.*)$$

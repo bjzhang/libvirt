@@ -427,6 +427,8 @@ skip_impl = (
     'virDomainGetDiskErrors',
     'virConnectUnregisterCloseCallback',
     'virConnectRegisterCloseCallback',
+    'virNodeGetMemoryParameters',
+    'virNodeSetMemoryParameters',
 )
 
 qemu_skip_impl = (
@@ -462,6 +464,11 @@ skip_function = (
     'virDomainSnapshotListAllChildren', # overridden in virDomainSnapshot.py
     'virConnectListAllStoragePools', # overridden in virConnect.py
     'virStoragePoolListAllVolumes', # overridden in virStoragePool.py
+    'virConnectListAllNetworks', # overridden in virConnect.py
+    'virConnectListAllInterfaces', # overridden in virConnect.py
+    'virConnectListAllNodeDevices', # overridden in virConnect.py
+    'virConnectListAllNWFilters', # overridden in virConnect.py
+    'virConnectListAllSecrets', # overridden in virConnect.py
 
     'virStreamRecvAll', # Pure python libvirt-override-virStream.py
     'virStreamSendAll', # Pure python libvirt-override-virStream.py

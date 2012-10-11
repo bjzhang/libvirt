@@ -14,7 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Author: Daniel Veillard <veillard@redhat.com>
@@ -671,14 +671,13 @@ virRaiseErrorFull(const char *filename ATTRIBUTE_UNUSED,
 
     /*
      * Hook up the error or warning to the logging facility
-     * XXXX should we include filename as 'category' instead of domain name ?
      */
     priority = virErrorLevelPriority(level);
     if (virErrorLogPriorityFilter)
         priority = virErrorLogPriorityFilter(to, priority);
-    virLogMessage(filename, priority,
-                  funcname, linenr,
-                  virErrorLogPriorityFilter ? 0 : 1,
+    virLogMessage(virErrorLogPriorityFilter ? VIR_LOG_FROM_FILE : VIR_LOG_FROM_ERROR,
+                  priority,
+                  filename, linenr, funcname,
                   "%s", str);
 
     errno = save_errno;

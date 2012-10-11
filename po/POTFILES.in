@@ -40,7 +40,8 @@ src/fdstream.c
 src/hyperv/hyperv_driver.c
 src/hyperv/hyperv_util.c
 src/hyperv/hyperv_wmi.c
-src/interface/netcf_driver.c
+src/interface/interface_backend_netcf.c
+src/interface/interface_backend_udev.c
 src/internal.h
 src/libvirt.c
 src/libvirt-qemu.c
@@ -157,6 +158,7 @@ src/util/virnetdevvportprofile.c
 src/util/virnetlink.c
 src/util/virnodesuspend.c
 src/util/virpidfile.c
+src/util/virprocess.c
 src/util/virrandom.c
 src/util/virsocketaddr.c
 src/util/virterror.c

@@ -14,7 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Daniel Veillard <veillard@redhat.com>
@@ -174,19 +174,20 @@ vshPrettyCapacity(unsigned long long val, const char **unit)
  * on error.
  */
 int
-vshStringToArray(char *str,
+vshStringToArray(const char *str,
                  char ***array)
 {
+    char *str_copied = vshStrdup(NULL, str);
     char *str_tok = NULL;
     unsigned int nstr_tokens = 0;
     char **arr = NULL;
 
     /* tokenize the string from user and save it's parts into an array */
-    if (str) {
+    if (str_copied) {
         nstr_tokens = 1;
 
         /* count the delimiters */
-        str_tok = str;
+        str_tok = str_copied;
         while (*str_tok) {
             if (*str_tok == ',')
                 nstr_tokens++;
@@ -195,12 +196,13 @@ vshStringToArray(char *str,
 
         if (VIR_ALLOC_N(arr, nstr_tokens) < 0) {
             virReportOOMError();
+            VIR_FREE(str_copied);
             return -1;
         }
 
         /* tokenize the input string */
         nstr_tokens = 0;
-        str_tok = str;
+        str_tok = str_copied;
         do {
             arr[nstr_tokens] = strsep(&str_tok, ",");
             nstr_tokens++;
@@ -2652,7 +2654,7 @@ vshShowVersion(vshControl *ctl ATTRIBUTE_UNUSED)
     vshPrint(ctl, "%s", _("Compiled with support for:\n"));
     vshPrint(ctl, "%s", _(" Hypervisors:"));
 #ifdef WITH_QEMU
-    vshPrint(ctl, " QEmu/KVM");
+    vshPrint(ctl, " QEMU/KVM");
 #endif
 #ifdef WITH_LXC
     vshPrint(ctl, " LXC");
@@ -2696,17 +2698,19 @@ vshShowVersion(vshControl *ctl ATTRIBUTE_UNUSED)
 #ifdef WITH_REMOTE
     vshPrint(ctl, " Remote");
 #endif
-#ifdef WITH_LIBVIRTD
-    vshPrint(ctl, " Daemon");
-#endif
 #ifdef WITH_NETWORK
     vshPrint(ctl, " Network");
 #endif
 #ifdef WITH_BRIDGE
     vshPrint(ctl, " Bridging");
 #endif
-#ifdef WITH_NETCF
+#if defined(WITH_INTERFACE)
     vshPrint(ctl, " Interface");
+# if defined(WITH_NETCF)
+    vshPrint(ctl, " netcf");
+# elif defined(HAVE_UDEV)
+    vshPrint(ctl, " udev");
+# endif
 #endif
 #ifdef WITH_NWFILTER
     vshPrint(ctl, " Nwfilter");
@@ -2747,6 +2751,9 @@ vshShowVersion(vshControl *ctl ATTRIBUTE_UNUSED)
     vshPrint(ctl, "\n");
 
     vshPrint(ctl, "%s", _(" Miscellaneous:"));
+#ifdef WITH_LIBVIRTD
+    vshPrint(ctl, " Daemon");
+#endif
 #ifdef WITH_NODE_DEVICES
     vshPrint(ctl, " Nodedev");
 #endif

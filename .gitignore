@@ -18,6 +18,7 @@
 *.s
 *~
 .deps
+.gdb_history
 .git
 .git-module-status
 .libs
@@ -93,6 +94,7 @@
 /python/libvirt.[ch]
 /python/libvirt.py
 /python/libvirt_qemu.py
+/run
 /sc_*
 /src/.*.stamp
 /src/esx/*.generated.*
@@ -157,6 +159,7 @@
 /tests/utiltest
 /tests/viratomictest
 /tests/virauthconfigtest
+/tests/virbitmaptest
 /tests/virbuftest
 /tests/virdrivermoduletest
 /tests/virhashtest

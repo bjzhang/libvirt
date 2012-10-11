@@ -15,7 +15,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Author: Daniel P. Berrange <berrange@redhat.com>
@@ -43,6 +43,7 @@
 # include "command.h"
 # include "threadpool.h"
 # include "locking/lock_manager.h"
+# include "qemu_capabilities.h"
 
 # define QEMUD_CPUMASK_LEN CPU_SETSIZE
 
@@ -115,6 +116,7 @@ struct qemud_driver {
     int max_queued;
 
     virCapsPtr caps;
+    qemuCapsCachePtr capsCache;
 
     virDomainEventStatePtr domainEventState;
 
@@ -152,6 +154,7 @@ struct qemud_driver {
 
     int keepAliveInterval;
     unsigned int keepAliveCount;
+    int seccompSandbox;
 };
 
 typedef struct _qemuDomainCmdlineDef qemuDomainCmdlineDef;

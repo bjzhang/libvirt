@@ -14,7 +14,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  *  Daniel Veillard <veillard@redhat.com>
@@ -606,7 +606,7 @@ vshStoragePoolListCollect(vshControl *ctl,
     int nInactivePools = 0;
     int nAllPools = 0;
 
-    /* try the list with flags support (0.10.0 and later) */
+    /* try the list with flags support (0.10.2 and later) */
     if ((ret = virConnectListAllStoragePools(ctl->conn,
                                              &list->pools,
                                              flags)) >= 0) {
@@ -615,10 +615,8 @@ vshStoragePoolListCollect(vshControl *ctl,
     }
 
     /* check if the command is actually supported */
-    if (last_error && last_error->code == VIR_ERR_NO_SUPPORT) {
-        vshResetLibvirtError();
+    if (last_error && last_error->code == VIR_ERR_NO_SUPPORT)
         goto fallback;
-    }
 
     if (last_error && last_error->code ==  VIR_ERR_INVALID_ARG) {
         /* try the new API again but mask non-guaranteed flags */
@@ -638,7 +636,7 @@ vshStoragePoolListCollect(vshControl *ctl,
 
 
 fallback:
-    /* fall back to old method (0.9.13 and older) */
+    /* fall back to old method (0.10.1 and older) */
     vshResetLibvirtError();
 
     /* There is no way to get the pool type */
@@ -856,7 +854,7 @@ cmdPoolList(vshControl *ctl, const vshCmd *cmd ATTRIBUTE_UNUSED)
         char **poolTypes = NULL;
         int npoolTypes = 0;
 
-        npoolTypes = vshStringToArray((char *)type, &poolTypes);
+        npoolTypes = vshStringToArray(type, &poolTypes);
 
         for (i = 0; i < npoolTypes; i++) {
             if ((poolType = virStoragePoolTypeFromString(poolTypes[i])) < 0) {
@@ -897,7 +895,10 @@ cmdPoolList(vshControl *ctl, const vshCmd *cmd ATTRIBUTE_UNUSED)
                 break;
             }
         }
-        VIR_FREE(poolTypes);
+        if (poolTypes) {
+            VIR_FREE(*poolTypes);
+            VIR_FREE(poolTypes);
+        }
     }
 
     if (!(list = vshStoragePoolListCollect(ctl, flags)))

@@ -12,7 +12,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * POSIX DAC security driver
@@ -68,28 +68,53 @@ void virSecurityDACSetDynamicOwnership(virSecurityManagerPtr mgr,
 static
 int parseIds(const char *label, uid_t *uidPtr, gid_t *gidPtr)
 {
-    unsigned int theuid;
-    unsigned int thegid;
-    char *endptr = NULL;
+    int rc = -1;
+    uid_t theuid;
+    gid_t thegid;
+    char *tmp_label = NULL;
+    char *sep = NULL;
+    char *owner = NULL;
+    char *group = NULL;
 
-    if (label == NULL)
-        return -1;
-
-    if (virStrToLong_ui(label, &endptr, 10, &theuid) ||
-        endptr == NULL || *endptr != ':') {
-        return -1;
+    tmp_label = strdup(label);
+    if (tmp_label == NULL) {
+        virReportOOMError();
+        goto cleanup;
     }
 
-    if (virStrToLong_ui(endptr + 1, NULL, 10, &thegid))
-        return -1;
+    /* Split label */
+    sep = strchr(tmp_label, ':');
+    if (sep == NULL) {
+        virReportError(VIR_ERR_INVALID_ARG,
+                       _("Missing separator ':' in DAC label \"%s\""),
+                       label);
+        goto cleanup;
+    }
+    *sep = '\0';
+    owner = tmp_label;
+    group = sep + 1;
+
+    /* Parse owner and group, error message is defined by
+     * virGetUserID or virGetGroupID.
+     */
+    if (virGetUserID(owner, &theuid) < 0 ||
+        virGetGroupID(group, &thegid) < 0)
+        goto cleanup;
 
     if (uidPtr)
         *uidPtr = theuid;
     if (gidPtr)
         *gidPtr = thegid;
-    return 0;
+
+    rc = 0;
+
+cleanup:
+    VIR_FREE(tmp_label);
+
+    return rc;
 }
 
+/* returns 1 if label isn't found, 0 on success, -1 on error */
 static
 int virSecurityDACParseIds(virDomainDefPtr def, uid_t *uidPtr, gid_t *gidPtr)
 {
@@ -98,22 +123,16 @@ int virSecurityDACParseIds(virDomainDefPtr def, uid_t *uidPtr, gid_t *gidPtr)
     virSecurityLabelDefPtr seclabel;
 
     if (def == NULL)
-        return -1;
+        return 1;
 
     seclabel = virDomainDefGetSecurityLabelDef(def, SECURITY_DAC_NAME);
     if (seclabel == NULL || seclabel->label == NULL) {
-        virReportError(VIR_ERR_INTERNAL_ERROR,
-                       _("security label for DAC not found in domain %s"),
-                       def->name);
-        return -1;
+        VIR_DEBUG("DAC seclabel for domain '%s' wasn't found", def->name);
+        return 1;
     }
 
-    if (seclabel->label && parseIds(seclabel->label, &uid, &gid)) {
-        virReportError(VIR_ERR_INTERNAL_ERROR,
-                       _("failed to parse uid and gid for DAC "
-                         "security driver: %s"), seclabel->label);
+    if (parseIds(seclabel->label, &uid, &gid) < 0)
         return -1;
-    }
 
     if (uidPtr)
         *uidPtr = uid;
@@ -127,19 +146,35 @@ static
 int virSecurityDACGetIds(virDomainDefPtr def, virSecurityDACDataPtr priv,
                          uid_t *uidPtr, gid_t *gidPtr)
 {
-    if (virSecurityDACParseIds(def, uidPtr, gidPtr) == 0)
-        return 0;
+    int ret;
 
-    if (priv) {
-        if (uidPtr)
-            *uidPtr = priv->user;
-        if (gidPtr)
-            *gidPtr = priv->group;
-        return 0;
+    if (!def && !priv) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                       _("Failed to determine default DAC seclabel "
+                         "for an unknown object"));
+        return -1;
     }
-    return -1;
+
+    if ((ret = virSecurityDACParseIds(def, uidPtr, gidPtr)) <= 0)
+        return ret;
+
+    if (!priv) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("DAC seclabel couldn't be determined "
+                         "for domain '%s'"), def->name);
+        return -1;
+    }
+
+    if (uidPtr)
+        *uidPtr = priv->user;
+    if (gidPtr)
+        *gidPtr = priv->group;
+
+    return 0;
 }
 
+
+/* returns 1 if label isn't found, 0 on success, -1 on error */
 static
 int virSecurityDACParseImageIds(virDomainDefPtr def,
                                 uid_t *uidPtr, gid_t *gidPtr)
@@ -149,23 +184,16 @@ int virSecurityDACParseImageIds(virDomainDefPtr def,
     virSecurityLabelDefPtr seclabel;
 
     if (def == NULL)
-        return -1;
+        return 1;
 
     seclabel = virDomainDefGetSecurityLabelDef(def, SECURITY_DAC_NAME);
     if (seclabel == NULL || seclabel->imagelabel == NULL) {
-        virReportError(VIR_ERR_INTERNAL_ERROR,
-                       _("security label for DAC not found in domain %s"),
-                       def->name);
-        return -1;
+        VIR_DEBUG("DAC imagelabel for domain '%s' wasn't found", def->name);
+        return 1;
     }
 
-    if (seclabel->imagelabel
-        && parseIds(seclabel->imagelabel, &uid, &gid)) {
-        virReportError(VIR_ERR_INTERNAL_ERROR,
-                       _("failed to parse uid and gid for DAC "
-                         "security driver: %s"), seclabel->label);
+    if (parseIds(seclabel->imagelabel, &uid, &gid) < 0)
         return -1;
-    }
 
     if (uidPtr)
         *uidPtr = uid;
@@ -179,17 +207,31 @@ static
 int virSecurityDACGetImageIds(virDomainDefPtr def, virSecurityDACDataPtr priv,
                          uid_t *uidPtr, gid_t *gidPtr)
 {
-    if (virSecurityDACParseImageIds(def, uidPtr, gidPtr) == 0)
-        return 0;
+    int ret;
 
-    if (priv) {
-        if (uidPtr)
-            *uidPtr = priv->user;
-        if (gidPtr)
-            *gidPtr = priv->group;
-        return 0;
+    if (!def && !priv) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                       _("Failed to determine default DAC imagelabel "
+                         "for an unknown object"));
+        return -1;
     }
-    return -1;
+
+    if ((ret = virSecurityDACParseImageIds(def, uidPtr, gidPtr)) <= 0)
+        return ret;
+
+    if (!priv) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("DAC imagelabel couldn't be determined "
+                         "for domain '%s'"), def->name);
+        return -1;
+    }
+
+    if (uidPtr)
+        *uidPtr = priv->user;
+    if (gidPtr)
+        *gidPtr = priv->group;
+
+    return 0;
 }
 
 

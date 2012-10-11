@@ -15,7 +15,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * Author: Daniel P. Berrange <berrange@redhat.com>
@@ -63,6 +63,7 @@
 #include "configmake.h"
 #include "virnetdevtap.h"
 #include "virnodesuspend.h"
+#include "virprocess.h"
 #include "viruri.h"
 
 #define VIR_FROM_THIS VIR_FROM_UML
@@ -1128,7 +1129,7 @@ static void umlShutdownVMDaemon(struct uml_driver *driver,
     if (!virDomainObjIsActive(vm))
         return;
 
-    virKillProcess(vm->pid, SIGTERM);
+    virProcessKill(vm->pid, SIGTERM);
 
     VIR_FORCE_CLOSE(priv->monitor);
 
@@ -2623,6 +2624,8 @@ static virDriver umlDriver = {
     .domainOpenConsole = umlDomainOpenConsole, /* 0.8.6 */
     .isAlive = umlIsAlive, /* 0.9.8 */
     .nodeSuspendForDuration = nodeSuspendForDuration, /* 0.9.8 */
+    .nodeGetMemoryParameters = nodeGetMemoryParameters, /* 0.10.2 */
+    .nodeSetMemoryParameters = nodeSetMemoryParameters, /* 0.10.2 */
 };
 
 static virStateDriver umlStateDriver = {

@@ -16,7 +16,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  * File created Jul 18, 2007 - Shuveb Hussain <shuveb@binarykarma.com>
@@ -210,7 +210,10 @@ char *virStrcpy(char *dest, const char *src, size_t destbytes)
 # define virStrcpyStatic(dest, src) virStrcpy((dest), (src), sizeof(dest))
 
 int virDoubleToStr(char **strp, double number)
- ATTRIBUTE_NONNULL(1) ATTRIBUTE_RETURN_CHECK;
+    ATTRIBUTE_NONNULL(1) ATTRIBUTE_RETURN_CHECK;
+
+char *virFormatIntDecimal(char *buf, size_t buflen, int val)
+    ATTRIBUTE_NONNULL(1) ATTRIBUTE_RETURN_CHECK;
 
 int virDiskNameToIndex(const char* str);
 char *virIndexToDiskName(int idx, const char *prefix);
@@ -255,8 +258,6 @@ static inline int getgid (void) { return 0; }
 
 char *virGetHostname(virConnectPtr conn);
 
-int virKillProcess(pid_t pid, int sig);
-
 char *virGetUserDirectory(void);
 char *virGetUserConfigDirectory(void);
 char *virGetUserCacheDirectory(void);
@@ -276,5 +277,7 @@ void virFileWaitForDevices(void);
 int virBuildPathInternal(char **path, ...) ATTRIBUTE_SENTINEL;
 
 bool virIsDevMapperDevice(const char *dev_name) ATTRIBUTE_NONNULL(1);
+
+bool virValidateWWN(const char *wwn);
 
 #endif /* __VIR_UTIL_H__ */

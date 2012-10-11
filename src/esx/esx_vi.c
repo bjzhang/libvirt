@@ -16,7 +16,7 @@
  * Lesser General Public License for more details.
  *
  * You should have received a copy of the GNU Lesser General Public
- * License along with this library;  If not, see
+ * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
  *
  */
@@ -330,6 +330,7 @@ esxVI_CURL_Connect(esxVI_CURL *curl, esxUtil_ParsedUri *parsedUri)
     }
 
     curl_easy_setopt(curl->handle, CURLOPT_USERAGENT, "libvirt-esx");
+    curl_easy_setopt(curl->handle, CURLOPT_NOSIGNAL, 1);
     curl_easy_setopt(curl->handle, CURLOPT_HEADER, 0);
     curl_easy_setopt(curl->handle, CURLOPT_FOLLOWLOCATION, 0);
     curl_easy_setopt(curl->handle, CURLOPT_SSL_VERIFYPEER,
