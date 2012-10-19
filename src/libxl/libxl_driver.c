@@ -141,6 +141,23 @@ libxlDomainObjResetAsyncJob(libxlDomainObjPrivatePtr priv)
     memset(&job->info, 0, sizeof(job->info));
 }
 
+void
+libxlDomainObjRestoreJob(virDomainObjPtr obj,
+                         struct libxlDomainJobObj *job)
+{
+    libxlDomainObjPrivatePtr priv = obj->privateData;
+
+    memset(job, 0, sizeof(*job));
+    job->active = priv->job.active;
+    job->owner = priv->job.owner;
+    job->asyncJob = priv->job.asyncJob;
+    job->asyncOwner = priv->job.asyncOwner;
+    job->phase = priv->job.phase;
+
+    libxlDomainObjResetJob(priv);
+    libxlDomainObjResetAsyncJob(priv);
+}
+
 static void
 libxlDomainObjFreeJob(libxlDomainObjPrivatePtr priv)
 {
@@ -1081,6 +1098,185 @@ error:
     return -1;
 }
 
+static int
+libxlProcessRecoverMigration(struct libxlDriverPrivatePtr *driver,
+                             virDomainObjPtr vm,
+                             enum libxlDomainAsyncJob job,
+                             enum libxlMigrationJobPhase phase,
+                             virDomainState state,
+                             int reason)
+{
+    libxlDomainObjPrivatePtr priv = vm->privateData;
+    int rc;
+
+    if (job == LIBXL_ASYNC_JOB_MIGRATION_IN) {
+        switch (phase) {
+        case LIBXL_MIGRATION_PHASE_NONE:
+        case LIBXL_MIGRATION_PHASE_BEGIN3:
+        case LIBXL_MIGRATION_PHASE_PERFORM3:
+        case LIBXL_MIGRATION_PHASE_PERFORM3_DONE:
+        case LIBXL_MIGRATION_PHASE_CONFIRM3_CANCELLED:
+        case LIBXL_MIGRATION_PHASE_CONFIRM3:
+        case LIBXL_MIGRATION_PHASE_LAST:
+            break;
+
+        case LIBXL_MIGRATION_PHASE_PREPARE:
+            VIR_DEBUG("Killing unfinished incoming migration for domain %s",
+                      vm->def->name);
+            return -1;
+
+        case LIBXL_MIGRATION_PHASE_FINISH3:
+            /* migration finished, we started resuming the domain but didn't
+             * confirm success or failure yet; killing it seems safest */
+            VIR_DEBUG("Killing migrated domain %s", vm->def->name);
+            return -1;
+        }
+    } else if (job == LIBXL_ASYNC_JOB_MIGRATION_OUT) {
+        switch (phase) {
+        case LIBXL_MIGRATION_PHASE_NONE:
+        case LIBXL_MIGRATION_PHASE_PREPARE:
+        case LIBXL_MIGRATION_PHASE_FINISH3:
+        case LIBXL_MIGRATION_PHASE_LAST:
+            break;
+
+        case LIBXL_MIGRATION_PHASE_BEGIN3:
+            /* nothing happen so far, just forget we were about to migrate the
+             * domain */
+            break;
+
+        case LIBXL_MIGRATION_PHASE_PERFORM3:
+            //\TODO: check the result
+#if 0
+            /* migration is still in progress, let's cancel it and resume the
+             * domain */
+            VIR_DEBUG("Canceling unfinished outgoing migration of domain %s",
+                      vm->def->name);
+            qemuDomainObjEnterMonitor(driver, vm);
+            ignore_value(qemuMonitorMigrateCancel(priv->mon));
+            qemuDomainObjExitMonitor(driver, vm);
+            /* resume the domain but only if it was paused as a result of
+             * migration */
+            if (state == VIR_DOMAIN_PAUSED &&
+                (reason == VIR_DOMAIN_PAUSED_MIGRATION ||
+                 reason == VIR_DOMAIN_PAUSED_UNKNOWN)) {
+                if (qemuProcessStartCPUs(driver, vm, conn,
+                                         VIR_DOMAIN_RUNNING_UNPAUSED,
+                                         LIBXL_ASYNC_JOB_NONE) < 0) {
+                    VIR_WARN("Could not resume domain %s", vm->def->name);
+                }
+            }
+#endif
+            break;
+
+        case LIBXL_MIGRATION_PHASE_PERFORM3_DONE:
+            /* migration finished but we didn't have a chance to get the result
+             * of Finish3 step; third party needs to check what to do next
+             */
+            break;
+
+        case LIBXL_MIGRATION_PHASE_CONFIRM3_CANCELLED:
+            /* Finish3 failed, we need to resume the domain */
+            VIR_DEBUG("Resuming domain %s after failed migration",
+                      vm->def->name);
+            if (state == VIR_DOMAIN_PAUSED &&
+                (reason == VIR_DOMAIN_PAUSED_MIGRATION ||
+                 reason == VIR_DOMAIN_PAUSED_UNKNOWN)) {
+                if (libxl_domain_unpause(&priv->ctx, vm->def->id)) {
+                    VIR_WARN("Could not resume domain %s", vm->def->name);
+                }
+            }
+            break;
+
+        case LIBXL_MIGRATION_PHASE_CONFIRM3:
+            /* migration completed, we need to kill the domain here */
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+static int
+libxlProcessRecoverJob(struct libxlDriverPrivatePtr *driver,
+                      virDomainObjPtr vm,
+                      const struct qemuDomainJobObj *job)
+{
+    libxlDomainObjPrivatePtr priv = vm->privateData;
+    virDomainState state;
+    int reason;
+
+    state = virDomainObjGetState(vm, &reason);
+
+    switch (job->asyncJob) {
+    case LIBXL_ASYNC_JOB_MIGRATION_OUT:
+    case LIBXL_ASYNC_JOB_MIGRATION_IN:
+        if (libxlProcessRecoverMigration(driver, vm, job->asyncJob,
+                                         job->phase, state, reason) < 0)
+            return -1;
+        break;
+
+    case LIBXL_ASYNC_JOB_SAVE:
+    case LIBXL_ASYNC_JOB_DUMP:
+        //\TODO: check the reture status
+#if 0
+        qemuDomainObjEnterMonitor(driver, vm);
+        ignore_value(qemuMonitorMigrateCancel(priv->mon));
+        qemuDomainObjExitMonitor(driver, vm);
+        /* resume the domain but only if it was paused as a result of
+         * running save/dump operation.  Although we are recovering an
+         * async job, this function is run at startup and must resume
+         * things using sync monitor connections.  */
+        if (state == VIR_DOMAIN_PAUSED &&
+            ((job->asyncJob == LIBXL_ASYNC_JOB_DUMP &&
+              reason == VIR_DOMAIN_PAUSED_DUMP) ||
+             (job->asyncJob == LIBXL_ASYNC_JOB_SAVE &&
+              reason == VIR_DOMAIN_PAUSED_SAVE) ||
+             reason == VIR_DOMAIN_PAUSED_UNKNOWN)) {
+            if (qemuProcessStartCPUs(driver, vm, conn,
+                                     VIR_DOMAIN_RUNNING_UNPAUSED,
+                                     LIBXL_ASYNC_JOB_NONE) < 0) {
+                VIR_WARN("Could not resume domain %s after", vm->def->name);
+            }
+        }
+#endif
+        break;
+
+    case LIBXL_ASYNC_JOB_NONE:
+    case LIBXL_ASYNC_JOB_LAST:
+        break;
+    }
+
+    if (!virDomainObjIsActive(vm))
+        return -1;
+
+    /* In case any special handling is added for job type that has been ignored
+     * before, LIBXL_DOMAIN_TRACK_JOBS (from qemu_domain.h) needs to be updated
+     * for the job to be properly tracked in domain state XML.
+     */
+    switch (job->active) {
+    case LIBXL_JOB_DESTROY:
+        VIR_DEBUG("Domain %s should have already been destroyed",
+                  vm->def->name);
+        return -1;
+
+    case LIBXL_JOB_MODIFY:
+        /* XXX depending on the command we may be in an inconsistent state and
+         * we should probably fall back to "monitor error" state and refuse to
+         */
+        break;
+
+    case LIBXL_JOB_MIGRATION_OP:
+    case LIBXL_JOB_ABORT:
+    case LIBXL_JOB_ASYNC:
+        /* async job was already handled above */
+    case LIBXL_JOB_NONE:
+    case LIBXL_JOB_LAST:
+        break;
+    }
+
+    return 0;
+}
+
 
 /*
  * Reconnect to running domains that were previously started/created
@@ -1097,41 +1293,58 @@ libxlReconnectDomain(void *payload,
     libxl_dominfo d_info;
     int len;
     uint8_t *data = NULL;
+    struct libxlDomainJobObj oldjob;
 
     virDomainObjLock(vm);
+
+    libxlDomainObjRestoreJob(obj, &oldjob);
+
+    if (libxlDomainObjBeginJobWithDriver(driver, vm, LIBXL_JOB_MODIFY) < 0)
+        goto out;
 
     /* Does domain still exist? */
     rc = libxl_domain_info(&driver->ctx, &d_info, vm->def->id);
     if (rc == ERROR_INVAL) {
-        goto out;
+        goto out_job;
     } else if (rc != 0) {
         VIR_DEBUG("libxl_domain_info failed (code %d), ignoring domain %d",
                   rc, vm->def->id);
-        goto out;
+        goto out_job;
     }
 
     /* Is this a domain that was under libvirt control? */
     if (libxl_userdata_retrieve(&driver->ctx, vm->def->id,
                                 "libvirt-xml", &data, &len)) {
         VIR_DEBUG("libxl_userdata_retrieve failed, ignoring domain %d", vm->def->id);
-        goto out;
+        goto out_job;
     }
 
     /* Update domid in case it changed (e.g. reboot) while we were gone? */
     vm->def->id = d_info.domid;
+
+    if (libxlProcessRecoverJob(driver, vm, &oldjob) < 0)
+        goto out_job;
+
     virDomainObjSetState(vm, VIR_DOMAIN_RUNNING, VIR_DOMAIN_RUNNING_UNKNOWN);
 
     /* Recreate domain death et. al. events */
     libxlCreateDomEvents(vm);
+    libxlDomainObjEndJobWithDriver(driver, vm);
+out:
     virDomainObjUnlock(vm);
     return;
 
-out:
+out_job:
     libxlVmCleanup(driver, vm, VIR_DOMAIN_SHUTOFF_UNKNOWN);
-    if (!vm->persistent)
-        virDomainRemoveInactive(&driver->domains, vm);
-    else
+
+    if (!vm->persistent) {
+        if (libxlDomainObjEndJobWithDriver(driver, vm))
+            virDomainRemoveInactive(&driver->domains, vm);
+        vm = NULL;
+    } else {
+        libxlDomainObjEndJobWithDriver(driver, vm);
         virDomainObjUnlock(vm);
+    }
 }
 
 static void
