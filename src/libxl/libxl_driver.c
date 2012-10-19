@@ -2550,6 +2550,13 @@ cleanup:
     return ret;
 }
 
+static int
+libxlDomainGetMaxVcpus(virDomainPtr dom)
+{
+    return libxlDomainGetVcpusFlags(dom, (VIR_DOMAIN_AFFECT_LIVE |
+                                          VIR_DOMAIN_VCPU_MAXIMUM));
+}
+
 static char *
 libxlDomainGetXMLDesc(virDomainPtr dom, unsigned int flags)
 {
@@ -3932,6 +3939,7 @@ static virDriver libxlDriver = {
     .domainGetVcpusFlags = libxlDomainGetVcpusFlags, /* 0.9.0 */
     .domainPinVcpu = libxlDomainPinVcpu, /* 0.9.0 */
     .domainGetVcpus = libxlDomainGetVcpus, /* 0.9.0 */
+    .domainGetMaxVcpus = libxlDomainGetMaxVcpus, /* 0.10.1 */
     .domainGetXMLDesc = libxlDomainGetXMLDesc, /* 0.9.0 */
     .domainXMLFromNative = libxlDomainXMLFromNative, /* 0.9.0 */
     .domainXMLToNative = libxlDomainXMLToNative, /* 0.9.0 */
