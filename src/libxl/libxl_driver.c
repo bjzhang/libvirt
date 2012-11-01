@@ -3387,6 +3387,55 @@ libxlDomainUpdateDeviceFlags(virDomainPtr dom, const char *xml,
     return libxlDomainModifyDeviceFlags(dom, xml, flags, LIBXL_DEVICE_UPDATE);
 }
 
+static int
+libxlDomainInterfaceStats(virDomainPtr dom,
+                          const char *path,
+                          struct _virDomainInterfaceStats *stats)
+{
+    struct qemud_driver *driver = dom->conn->privateData;
+    virDomainObjPtr vm;
+    int i;
+    int ret = -1;
+
+    libxlDriverLock(driver);
+    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    libxlDriverUnlock(driver);
+
+    if (!vm) {
+        char uuidstr[VIR_UUID_STRING_BUFLEN];
+        virUUIDFormat(dom->uuid, uuidstr);
+        virReportError(VIR_ERR_NO_DOMAIN,
+                       _("no domain with matching uuid '%s'"), uuidstr);
+        goto cleanup;
+    }
+
+    if (!virDomainObjIsActive(vm)) {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                       "%s", _("domain is not running"));
+        goto cleanup;
+    }
+
+    /* Check the path is one of the domain's network interfaces. */
+    for (i = 0 ; i < vm->def->nnets ; i++) {
+        if (vm->def->nets[i]->ifname &&
+            STREQ (vm->def->nets[i]->ifname, path)) {
+            ret = 0;
+            break;
+        }
+    }
+
+    if (ret == 0)
+        ret = linuxDomainInterfaceStats(path, stats);
+    else
+        virReportError(VIR_ERR_INVALID_ARG,
+                       _("invalid path, '%s' is not a known interface"), path);
+
+cleanup:
+    if (vm)
+        virDomainObjUnlock(vm);
+    return ret;
+}
+
 static unsigned long long
 libxlNodeGetFreeMemory(virConnectPtr conn)
 {
@@ -3962,6 +4011,7 @@ static virDriver libxlDriver = {
     .domainGetSchedulerParametersFlags = libxlDomainGetSchedulerParametersFlags, /* 0.9.2 */
     .domainSetSchedulerParameters = libxlDomainSetSchedulerParameters, /* 0.9.0 */
     .domainSetSchedulerParametersFlags = libxlDomainSetSchedulerParametersFlags, /* 0.9.2 */
+    .domainInterfaceStats = libxlDomainInterfaceStats, /* 0.10.0 */
     .nodeGetFreeMemory = libxlNodeGetFreeMemory, /* 0.9.0 */
     .domainEventRegister = libxlDomainEventRegister, /* 0.9.0 */
     .domainEventDeregister = libxlDomainEventDeregister, /* 0.9.0 */
