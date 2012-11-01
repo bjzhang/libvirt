@@ -97,8 +97,6 @@ VIR_ENUM_IMPL(libxlDomainJob, LIBXL_JOB_LAST,
 
 VIR_ENUM_IMPL(libxlDomainAsyncJob, LIBXL_ASYNC_JOB_LAST,
               "none",
-              "migration out",
-              "migration in",
               "save",
               "dump",
 );
@@ -315,8 +313,7 @@ libxlDomainObjBeginAsyncJob(libxlDriverPrivatePtr driver,
 }
 
 /*
- * obj must be locked before calling. If libxlDriverPrivatePtr is passed, it
- * MUST be locked; otherwise it MUST NOT be locked.
+ * obj must be locked before calling. libxlDriverPrivatePtr MUST be locked
  *
  * This must be called by anything that will change the VM state
  * in any way
@@ -388,30 +385,6 @@ libxlDomainObjEndAsyncJob(libxlDriverPrivatePtr driver, virDomainObjPtr obj)
     virCondBroadcast(&priv->job.asyncCond);
 
     return virObjectUnref(obj);
-}
-
-static int ATTRIBUTE_UNUSED
-libxlMigrationJobStart(libxlDriverPrivatePtr driver,
-                       virDomainObjPtr vm,
-                       enum libxlDomainAsyncJob job)
-{
-    libxlDomainObjPrivatePtr priv = vm->privateData;
-
-    if (libxlDomainObjBeginAsyncJobWithDriver(driver, vm, job) < 0)
-        return -1;
-
-    libxlDomainObjSetAsyncJobMask(vm, DEFAULT_JOB_MASK |
-                                  JOB_MASK(LIBXL_JOB_MIGRATION_OP));
-
-    priv->job.info.type = VIR_DOMAIN_JOB_UNBOUNDED;
-
-    return 0;
-}
-
-static bool ATTRIBUTE_UNUSED
-libxlMigrationJobFinish(libxlDriverPrivatePtr driver, virDomainObjPtr vm)
-{
-    return libxlDomainObjEndAsyncJob(driver, vm);
 }
 /* job function finish */
 

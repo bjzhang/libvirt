@@ -93,7 +93,7 @@ enum libxlDomainJob {
     LIBXL_JOB_ABORT,         /* Abort current async job */
     LIBXL_JOB_MIGRATION_OP,  /* Operation influencing outgoing migration */
 
-    /* The following two items must always be the last items before JOB_LAST */
+    /* The following item must always be the last item before JOB_LAST */
     LIBXL_JOB_ASYNC,         /* Asynchronous job */
 
     LIBXL_JOB_LAST
@@ -106,8 +106,6 @@ VIR_ENUM_DECL(libxlDomainJob)
  */
 enum libxlDomainAsyncJob {
     LIBXL_ASYNC_JOB_NONE = 0,
-    LIBXL_ASYNC_JOB_MIGRATION_OUT,
-    LIBXL_ASYNC_JOB_MIGRATION_IN,
     LIBXL_ASYNC_JOB_SAVE,
     LIBXL_ASYNC_JOB_DUMP,
 
