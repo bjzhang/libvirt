@@ -45,6 +45,7 @@
 #include "xen_xm.h"
 #include "virtypedparam.h"
 #include "viruri.h"
+#include "stats_linux.h"
 
 #define VIR_FROM_THIS VIR_FROM_LIBXL
 
@@ -3392,7 +3393,7 @@ libxlDomainInterfaceStats(virDomainPtr dom,
                           const char *path,
                           struct _virDomainInterfaceStats *stats)
 {
-    struct qemud_driver *driver = dom->conn->privateData;
+    libxlDriverPrivatePtr driver = dom->conn->privateData;
     virDomainObjPtr vm;
     int i;
     int ret = -1;
