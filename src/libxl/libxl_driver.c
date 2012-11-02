@@ -171,7 +171,7 @@ libxlDomainNestedJobAllowed(libxlDomainObjPrivatePtr priv, enum libxlDomainJob j
     return !priv->job.asyncJob || (priv->job.mask & JOB_MASK(job)) != 0;
 }
 
-static void
+static void ATTRIBUTE_UNUSED
 libxlDomainObjSetAsyncJobMask(virDomainObjPtr obj,
                               unsigned long long allowedJobs)
 {
