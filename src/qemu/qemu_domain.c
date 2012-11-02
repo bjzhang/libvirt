@@ -36,6 +36,7 @@
 #include "virfile.h"
 #include "domain_event.h"
 #include "virtime.h"
+#include "storage_file.h"
 
 #include <sys/time.h>
 #include <fcntl.h>
@@ -45,10 +46,6 @@
 #define VIR_FROM_THIS VIR_FROM_QEMU
 
 #define QEMU_NAMESPACE_HREF "http://libvirt.org/schemas/domain/qemu/1.0"
-
-#define QEMU_DOMAIN_FORMAT_LIVE_FLAGS       \
-    (VIR_DOMAIN_XML_SECURE |                \
-     VIR_DOMAIN_XML_UPDATE_CPU)
 
 VIR_ENUM_IMPL(qemuDomainJob, QEMU_JOB_LAST,
               "none",
@@ -884,8 +881,7 @@ int qemuDomainObjBeginAsyncJob(struct qemud_driver *driver,
 }
 
 /*
- * obj must be locked before calling. If qemud_driver is passed, it MUST be
- * locked; otherwise it MUST NOT be locked.
+ * obj and qemud_driver must be locked before calling.
  *
  * This must be called by anything that will change the VM state
  * in any way, or anything that will use the QEMU monitor.
@@ -1220,7 +1216,6 @@ int
 qemuDomainDefFormatBuf(struct qemud_driver *driver,
                        virDomainDefPtr def,
                        unsigned int flags,
-                       bool compatible,
                        virBuffer *buf)
 {
     int ret = -1;
@@ -1233,7 +1228,9 @@ qemuDomainDefFormatBuf(struct qemud_driver *driver,
     if ((flags & VIR_DOMAIN_XML_UPDATE_CPU) &&
         def_cpu &&
         (def_cpu->mode != VIR_CPU_MODE_CUSTOM || def_cpu->model)) {
-        if (!driver->caps || !driver->caps->host.cpu) {
+        if (!driver->caps ||
+            !driver->caps->host.cpu ||
+            !driver->caps->host.cpu->model) {
             virReportError(VIR_ERR_OPERATION_FAILED,
                            "%s", _("cannot get host CPU capabilities"));
             goto cleanup;
@@ -1245,7 +1242,7 @@ qemuDomainDefFormatBuf(struct qemud_driver *driver,
         def->cpu = cpu;
     }
 
-    if (compatible) {
+    if ((flags & VIR_DOMAIN_XML_MIGRATABLE)) {
         int i;
         virDomainControllerDefPtr usb = NULL;
 
@@ -1297,12 +1294,11 @@ cleanup:
 
 char *qemuDomainDefFormatXML(struct qemud_driver *driver,
                              virDomainDefPtr def,
-                             unsigned int flags,
-                             bool compatible)
+                             unsigned int flags)
 {
     virBuffer buf = VIR_BUFFER_INITIALIZER;
 
-    if (qemuDomainDefFormatBuf(driver, def, flags, compatible, &buf) < 0) {
+    if (qemuDomainDefFormatBuf(driver, def, flags, &buf) < 0) {
         virBufferFreeAndReset(&buf);
         return NULL;
     }
@@ -1318,8 +1314,7 @@ char *qemuDomainDefFormatXML(struct qemud_driver *driver,
 
 char *qemuDomainFormatXML(struct qemud_driver *driver,
                           virDomainObjPtr vm,
-                          unsigned int flags,
-                          bool compatible)
+                          unsigned int flags)
 {
     virDomainDefPtr def;
 
@@ -1328,7 +1323,7 @@ char *qemuDomainFormatXML(struct qemud_driver *driver,
     else
         def = vm->def;
 
-    return qemuDomainDefFormatXML(driver, def, flags, compatible);
+    return qemuDomainDefFormatXML(driver, def, flags);
 }
 
 char *
@@ -1341,8 +1336,10 @@ qemuDomainDefFormatLive(struct qemud_driver *driver,
 
     if (inactive)
         flags |= VIR_DOMAIN_XML_INACTIVE;
+    if (compatible)
+        flags |= VIR_DOMAIN_XML_MIGRATABLE;
 
-    return qemuDomainDefFormatXML(driver, def, flags, compatible);
+    return qemuDomainDefFormatXML(driver, def, flags);
 }
 
 
@@ -1414,7 +1411,7 @@ void qemuDomainObjCheckDiskTaint(struct qemud_driver *driver,
                                  virDomainDiskDefPtr disk,
                                  int logFD)
 {
-    if (!disk->driverType &&
+    if ((!disk->format || disk->format == VIR_STORAGE_FILE_AUTO) &&
         driver->allowDiskFormatProbing)
         qemuDomainObjTaint(driver, obj, VIR_DOMAIN_TAINT_DISK_PROBING, logFD);
 
@@ -1602,7 +1599,6 @@ qemuDomainSnapshotWriteMetadata(virDomainObjPtr vm,
     char *snapDir = NULL;
     char *snapFile = NULL;
     char uuidstr[VIR_UUID_STRING_BUFLEN];
-    char *tmp;
 
     virUUIDFormat(vm->def->uuid, uuidstr);
     newxml = virDomainSnapshotDefFormat(uuidstr, snapshot->def,
@@ -1625,13 +1621,7 @@ qemuDomainSnapshotWriteMetadata(virDomainObjPtr vm,
         goto cleanup;
     }
 
-    if (virAsprintf(&tmp, "snapshot-edit %s", vm->def->name) < 0) {
-        virReportOOMError();
-        goto cleanup;
-    }
-
-    ret = virXMLSaveFile(snapFile, snapshot->def->name, tmp, newxml);
-    VIR_FREE(tmp);
+    ret = virXMLSaveFile(snapFile, NULL, "snapshot-edit", newxml);
 
 cleanup:
     VIR_FREE(snapFile);
@@ -1666,8 +1656,8 @@ qemuDomainSnapshotForEachQcow2Raw(struct qemud_driver *driver,
     for (i = 0; i < ndisks; i++) {
         /* FIXME: we also need to handle LVM here */
         if (def->disks[i]->device == VIR_DOMAIN_DISK_DEVICE_DISK) {
-            if (!def->disks[i]->driverType ||
-                STRNEQ(def->disks[i]->driverType, "qcow2")) {
+            if (def->disks[i]->format > 0 &&
+                def->disks[i]->format != VIR_STORAGE_FILE_QCOW2) {
                 if (try_all) {
                     /* Continue on even in the face of error, since other
                      * disks in this VM may have the same snapshot name.
@@ -2014,4 +2004,30 @@ qemuDomainCleanupRun(struct qemud_driver *driver,
     VIR_FREE(priv->cleanupCallbacks);
     priv->ncleanupCallbacks = 0;
     priv->ncleanupCallbacks_max = 0;
+}
+
+int
+qemuDomainDetermineDiskChain(struct qemud_driver *driver,
+                             virDomainDiskDefPtr disk,
+                             bool force)
+{
+    bool probe = driver->allowDiskFormatProbing;
+
+    if (!disk->src)
+        return 0;
+
+    if (disk->backingChain) {
+        if (force) {
+            virStorageFileFreeMetadata(disk->backingChain);
+            disk->backingChain = NULL;
+        } else {
+            return 0;
+        }
+    }
+    disk->backingChain = virStorageFileGetMetadata(disk->src, disk->format,
+                                                   driver->user, driver->group,
+                                                   probe);
+    if (!disk->backingChain)
+        return -1;
+    return 0;
 }

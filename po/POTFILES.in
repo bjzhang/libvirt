@@ -26,6 +26,7 @@ src/conf/virconsole.c
 src/cpu/cpu.c
 src/cpu/cpu_generic.c
 src/cpu/cpu_map.c
+src/cpu/cpu_powerpc.c
 src/cpu/cpu_x86.c
 src/datatypes.c
 src/driver.c
@@ -47,6 +48,7 @@ src/libvirt.c
 src/libvirt-qemu.c
 src/locking/lock_driver_sanlock.c
 src/locking/lock_manager.c
+src/locking/sanlock_helper.c
 src/lxc/lxc_cgroup.c
 src/lxc/lxc_container.c
 src/lxc/lxc_conf.c
@@ -102,6 +104,7 @@ src/rpc/virnetserver.c
 src/rpc/virnetserverclient.c
 src/rpc/virnetservermdns.c
 src/rpc/virnetserverprogram.c
+src/rpc/virnetserverservice.c
 src/rpc/virnetsshsession.c
 src/rpc/virnettlscontext.c
 src/secret/secret_driver.c
@@ -149,6 +152,7 @@ src/util/virdbus.c
 src/util/virfile.c
 src/util/virhash.c
 src/util/virkeyfile.c
+src/util/virlockspace.c
 src/util/virnetdev.c
 src/util/virnetdevbridge.c
 src/util/virnetdevmacvlan.c

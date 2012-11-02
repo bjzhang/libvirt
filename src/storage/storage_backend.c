@@ -1227,7 +1227,7 @@ virStorageBackendUpdateVolTargetInfoFD(virStorageVolTargetPtr target,
 
 #if HAVE_SELINUX
     /* XXX: make this a security driver call */
-    if (fgetfilecon(fd, &filecon) == -1) {
+    if (fgetfilecon_raw(fd, &filecon) == -1) {
         if (errno != ENODATA && errno != ENOTSUP) {
             virReportSystemError(errno,
                                  _("cannot get file context of '%s'"),
@@ -1338,10 +1338,14 @@ virStorageBackendDetectBlockVolFormatFD(virStorageVolTargetPtr target,
  *
  * Typically target.path is one of the /dev/disk/by-XXX dirs
  * with stable paths.
+ *
+ * If 'loop' is true, we use a timeout loop to give dynamic paths
+ * a change to appear.
  */
 char *
 virStorageBackendStablePath(virStoragePoolObjPtr pool,
-                            const char *devpath)
+                            const char *devpath,
+                            bool loop)
 {
     DIR *dh;
     struct dirent *dent;
@@ -1372,7 +1376,7 @@ virStorageBackendStablePath(virStoragePoolObjPtr pool,
  reopen:
     if ((dh = opendir(pool->def->target.path)) == NULL) {
         opentries++;
-        if (errno == ENOENT && opentries < 50) {
+        if (loop && errno == ENOENT && opentries < 50) {
             usleep(100 * 1000);
             goto reopen;
         }
@@ -1387,7 +1391,7 @@ virStorageBackendStablePath(virStoragePoolObjPtr pool,
      * the target directory and figure out which one points
      * to this device node.
      *
-     * And it might need some time till the stabe path shows
+     * And it might need some time till the stable path shows
      * up, so add timeout to retry here.
      */
  retry:
@@ -1411,7 +1415,7 @@ virStorageBackendStablePath(virStoragePoolObjPtr pool,
         VIR_FREE(stablepath);
     }
 
-    if (++retry < 100) {
+    if (loop && ++retry < 100) {
         usleep(100 * 1000);
         goto retry;
     }

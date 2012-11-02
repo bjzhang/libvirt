@@ -136,6 +136,8 @@ struct _qemuMonitorCallbacks {
     int (*domainBalloonChange)(qemuMonitorPtr mon,
                                virDomainObjPtr vm,
                                unsigned long long actual);
+    int (*domainPMSuspendDisk)(qemuMonitorPtr mon,
+                               virDomainObjPtr vm);
 };
 
 char *qemuMonitorEscapeArg(const char *in);
@@ -213,6 +215,7 @@ int qemuMonitorEmitBlockJob(qemuMonitorPtr mon,
                             int status);
 int qemuMonitorEmitBalloonChange(qemuMonitorPtr mon,
                                  unsigned long long actual);
+int qemuMonitorEmitPMSuspendDisk(qemuMonitorPtr mon);
 
 int qemuMonitorStartCPUs(qemuMonitorPtr mon,
                          virConnectPtr conn);
@@ -520,6 +523,25 @@ int qemuMonitorDiskSnapshot(qemuMonitorPtr mon,
                             bool reuse);
 int qemuMonitorTransaction(qemuMonitorPtr mon, virJSONValuePtr actions)
     ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2);
+int qemuMonitorDriveMirror(qemuMonitorPtr mon,
+                           const char *device,
+                           const char *file,
+                           const char *format,
+                           unsigned long bandwidth,
+                           unsigned int flags)
+    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_NONNULL(3);
+int qemuMonitorDrivePivot(qemuMonitorPtr mon,
+                          const char *device,
+                          const char *file,
+                          const char *format)
+    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_NONNULL(3);
+
+int qemuMonitorBlockCommit(qemuMonitorPtr mon,
+                           const char *device,
+                           const char *top,
+                           const char *base,
+                           unsigned long bandwidth)
+    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_NONNULL(3);
 
 int qemuMonitorArbitraryCommand(qemuMonitorPtr mon,
                                 const char *cmd,
@@ -597,6 +619,10 @@ int qemuMonitorGetCommands(qemuMonitorPtr mon,
                            char ***commands);
 int qemuMonitorGetEvents(qemuMonitorPtr mon,
                          char ***events);
+
+int qemuMonitorGetKVMState(qemuMonitorPtr mon,
+                           bool *enabled,
+                           bool *present);
 
 int qemuMonitorGetObjectTypes(qemuMonitorPtr mon,
                               char ***types);

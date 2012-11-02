@@ -135,6 +135,15 @@ struct _virStoragePoolTypeInfo {
     virStorageVolOptions volOptions;
 };
 
+static int
+virStorageVolumeFormatFromString(const char *format)
+{
+    int ret = virStorageFileFormatTypeFromString(format);
+    if (ret == VIR_STORAGE_FILE_NONE)
+        return -1;
+    return ret;
+}
+
 static virStoragePoolTypeInfo poolTypeInfo[] = {
     { .poolType = VIR_STORAGE_POOL_LOGICAL,
       .poolOptions = {
@@ -148,7 +157,7 @@ static virStoragePoolTypeInfo poolTypeInfo[] = {
     { .poolType = VIR_STORAGE_POOL_DIR,
       .volOptions = {
             .defaultFormat = VIR_STORAGE_FILE_RAW,
-            .formatFromString = virStorageFileFormatTypeFromString,
+            .formatFromString = virStorageVolumeFormatFromString,
             .formatToString = virStorageFileFormatTypeToString,
         },
     },
@@ -161,7 +170,7 @@ static virStoragePoolTypeInfo poolTypeInfo[] = {
         },
       .volOptions = {
             .defaultFormat = VIR_STORAGE_FILE_RAW,
-            .formatFromString = virStorageFileFormatTypeFromString,
+            .formatFromString = virStorageVolumeFormatFromString,
             .formatToString = virStorageFileFormatTypeToString,
         },
     },
@@ -175,7 +184,7 @@ static virStoragePoolTypeInfo poolTypeInfo[] = {
         },
       .volOptions = {
             .defaultFormat = VIR_STORAGE_FILE_RAW,
-            .formatFromString = virStorageFileFormatTypeFromString,
+            .formatFromString = virStorageVolumeFormatFromString,
             .formatToString = virStorageFileFormatTypeToString,
         },
     },
@@ -1628,6 +1637,7 @@ virStoragePoolObjSaveDef(virStorageDriverStatePtr driver,
                          virStoragePoolObjPtr pool,
                          virStoragePoolDefPtr def)
 {
+    char uuidstr[VIR_UUID_STRING_BUFLEN];
     char *xml;
     int ret = -1;
 
@@ -1657,7 +1667,10 @@ virStoragePoolObjSaveDef(virStorageDriverStatePtr driver,
         return -1;
     }
 
-    ret = virXMLSaveFile(pool->configFile, def->name, "pool-edit", xml);
+    virUUIDFormat(def->uuid, uuidstr);
+    ret = virXMLSaveFile(pool->configFile,
+                         virXMLPickShellSafeComment(def->name, uuidstr),
+                         "pool-edit", xml);
     VIR_FREE(xml);
 
     return ret;

@@ -129,7 +129,7 @@ Several B<virsh> commands take an optionally scaled integer; if no
 scale is provided, then the default is listed in the command (for
 historical reasons, some commands default to bytes, while other
 commands default to kibibytes).  The following case-insensitive
-suffixes can be used to select a specfic scale:
+suffixes can be used to select a specific scale:
   b, byte  byte      1
   KB       kilobyte  1,000
   k, KiB   kibibyte  1,024
@@ -277,6 +277,11 @@ and size of the physical memory. The output corresponds to virNodeInfo
 structure. Specifically, the "CPU socket(s)" field means number of CPU
 sockets per NUMA cell.
 
+=item B<nodecpumap>
+
+Displays the node's total number of CPUs, the number of online CPUs
+and the list of online CPUs.
+
 =item B<nodecpustats> [I<cpu>] [I<--percent>]
 
 Returns cpu stats of the node.
@@ -289,7 +294,7 @@ statistics during 1 second.
 Returns memory stats of the node.
 If I<cell> is specified, this will prints specified cell statistics only.
 
-=item B<nodesuspend> [I<target>] [I<duration>] [I<flags>]
+=item B<nodesuspend> [I<target>] [I<duration>]
 
 Puts the node (host machine) into a system-wide sleep state such as
 Suspend-to-RAM, Suspend-to-Disk or Hybrid-Suspend and sets up a
@@ -303,7 +308,10 @@ Allows you to display or set the node memory parameters.
 I<shm-pages-to-scan> can be used to set the number of pages to scan
 before the shared memory service goes to sleep; I<shm-sleep-millisecs>
 can be used to set the number of millisecs the shared memory service should
-sleep before next scan.
+sleep before next scan; I<shm-merge-across-nodes> specifies if pages from
+different numa nodes can be merged. When set to 0, only pages which physically
+reside in the memory area of same NUMA node can be merged. When set to 1,
+pages from all nodes can be merged. Default to 1.
 
 =item B<capabilities>
 
@@ -607,7 +615,7 @@ Availability of these fields depends on hypervisor. Unsupported fields are
 missing from the output. Other fields may appear if communicating with a newer
 version of libvirtd.
 
-B<Explanation of fields> (fields appear in the folowing order):
+B<Explanation of fields> (fields appear in the following order):
   rd_req            - count of read operations
   rd_bytes          - count of read bytes
   wr_req            - count of write operations
@@ -729,7 +737,7 @@ I<bandwidth> specifies copying bandwidth limit in MiB/s, although for
 qemu, it may be non-zero only for an online domain.
 
 =item B<blockcopy> I<domain> I<path> I<dest> [I<bandwidth>] [I<--shallow>]
-[I<--reuse-external>] [I<--raw>] [I<--wait> [I<--verbose]
+[I<--reuse-external>] [I<--raw>] [I<--wait> [I<--verbose>]
 [{I<--pivot> | I<--finish>}] [I<--timeout> B<seconds>] [I<--async>]]
 
 Copy a disk backing image chain to I<dest>. By default, this command
@@ -770,7 +778,7 @@ I<path> specifies fully-qualified path of the disk.
 I<bandwidth> specifies copying bandwidth limit in MiB/s.
 
 =item B<blockpull> I<domain> I<path> [I<bandwidth>] [I<base>]
-[I<--wait> [I<--verbose>] [I<--timeout> B<seconds>] [I<--async]]
+[I<--wait> [I<--verbose>] [I<--timeout> B<seconds>] [I<--async>]]
 
 Populate a disk from its backing image chain. By default, this command
 flattens the entire chain; but if I<base> is specified, containing the
@@ -948,7 +956,7 @@ NOTE: Some hypervisors may require the user to manually ensure proper
 permissions on file and path specified by argument I<corefilepath>.
 
 =item B<dumpxml> I<domain> [I<--inactive>] [I<--security-info>]
-[I<--update-cpu>]
+[I<--update-cpu>] [I<--migratable>]
 
 Output the domain information as an XML dump to stdout, this format can be used
 by the B<create> command. Additional options affecting the XML dump may be
@@ -956,7 +964,10 @@ used. I<--inactive> tells virsh to dump domain configuration that will be used
 on next start of the domain as opposed to the current domain configuration.
 Using I<--security-info> will also include security sensitive information
 in the XML dump. I<--update-cpu> updates domain CPU requirements according to
-host CPU.
+host CPU. With I<--migratable> one can request an XML that is suitable for
+migrations, i.e., compatible with older libvirt releases and possibly amended
+with internal run-time options. This option may automatically enable other
+options (I<--update-cpu>, I<--security-info>, ...) as necessary.
 
 =item B<edit> I<domain>
 
@@ -1289,6 +1300,10 @@ will be held for that many milliseconds.  The default codeset is
 B<linux>, but use of the I<--codeset> option allows other codesets to
 be chosen.
 
+If multiple keycodes are specified, they are all sent simultaneously
+to the guest, and they may be received in random order. If you need
+distinct keypresses, you must use multiple send-key invocations.
+
 =over 4
 
 =item B<linux>
@@ -1353,10 +1368,14 @@ bit of the first byte. No symbolic names are provided.
 =back
 
 B<Examples>
-  # send three strokes 'k', 'e', 'y', using xt codeset
+  # send three strokes 'k', 'e', 'y', using xt codeset. these
+  # are all pressed simultaneously and may be received by the guest
+  # in random order
   virsh send-key dom --codeset xt 37 18 21
+
   # send one stroke 'right-ctrl+C'
   virsh send-key dom KEY_RIGHTCTRL KEY_C
+
   # send a tab, held for 1 second
   virsh send-key --holdtime 1000 0xf
 
@@ -2043,9 +2062,9 @@ the network; if a parent-index isn't provided, the "most appropriate"
 <dhcp> element), but if I<--parent-index> is given, that particular
 instance of <ip> will get the modification.
 
-If I<--live> is specified, affect a running guest.
-If I<--config> is specified, affect the next boot of a persistent guest.
-If I<--current> is specified, affect the current guest state.
+If I<--live> is specified, affect a running network.
+If I<--config> is specified, affect the next startup of a persistent network.
+If I<--current> is specified, affect the current network state.
 Both I<--live> and I<--config> flags may be given, but I<--current> is
 exclusive. Not specifying any flag is the same as specifying I<--current>.
 
@@ -2403,7 +2422,7 @@ is in.
 I<vol-name-or-key-or-path> is the name or key or path of the volume to wipe.
 I<--offset> is the position in the storage volume at which to start writing
 the data. I<--length> is an upper bound of the amount of data to be uploaded.
-An error will occurr if the I<local-file> is greater than the specified length.
+An error will occur if the I<local-file> is greater than the specified length.
 
 =item B<vol-download> [I<--pool> I<pool-or-uuid>] [I<--offset> I<bytes>]
 [I<--length> I<bytes>] I<vol-name-or-key-or-path> I<local-file>
@@ -2651,7 +2670,7 @@ this flag is in use, the command can also take additional I<diskspec>
 arguments to add <disk> elements to the xml.  Each <diskspec> is in the
 form B<disk[,snapshot=type][,driver=type][,file=name]>.  To include a
 literal comma in B<disk> or in B<file=name>, escape it with a second
-comma.  A literal I<--diskspec> must preceed each B<diskspec> unless
+comma.  A literal I<--diskspec> must precede each B<diskspec> unless
 all three of I<domain>, I<name>, and I<description> are also present.
 For example, a diskspec of "vda,snapshot=external,file=/path/to,,new"
 results in the following XML:
@@ -2745,7 +2764,9 @@ start at the current snapshot.  When used in isolation or with
 I<--parent>, the list is limited to direct children unless
 I<--descendants> is also present.  When used with I<--tree>, the
 use of I<--descendants> is implied.  This option is not compatible
-with I<--roots>.
+with I<--roots>.  Note that the starting point of I<--from> or
+I<--current> is not included in the list unless the I<--tree>
+option is also present.
 
 If I<--leaves> is specified, the list will be filtered to just
 snapshots that have no children.  Likewise, if I<--no-leaves> is
@@ -2921,8 +2942,6 @@ the result will also be converted back from QMP.  If I<--pretty> is given,
 and the monitor uses QMP, then the output will be pretty-printed.  If more
 than one argument is provided for I<command>, they are concatenated with a
 space in between before passing the single command to the monitor.
-
-=back
 
 =item B<qemu-agent-command> I<domain> [I<--timeout> I<seconds> | I<--async> | I<--block>] I<command>...
 

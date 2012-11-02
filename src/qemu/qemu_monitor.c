@@ -1111,6 +1111,16 @@ int qemuMonitorEmitPMSuspend(qemuMonitorPtr mon)
     return ret;
 }
 
+int qemuMonitorEmitPMSuspendDisk(qemuMonitorPtr mon)
+{
+    int ret = -1;
+    VIR_DEBUG("mon=%p", mon);
+
+    QEMU_MONITOR_CALLBACK(mon, ret, domainPMSuspendDisk, mon->vm);
+
+    return ret;
+}
+
 int qemuMonitorEmitBlockJob(qemuMonitorPtr mon,
                             const char *diskAlias,
                             int type,
@@ -2770,6 +2780,39 @@ qemuMonitorDiskSnapshot(qemuMonitorPtr mon, virJSONValuePtr actions,
     return ret;
 }
 
+/* Start a drive-mirror block job.  bandwidth is in MiB/sec.  */
+int
+qemuMonitorDriveMirror(qemuMonitorPtr mon,
+                       const char *device, const char *file,
+                       const char *format, unsigned long bandwidth,
+                       unsigned int flags)
+{
+    int ret = -1;
+    unsigned long long speed;
+
+    VIR_DEBUG("mon=%p, device=%s, file=%s, format=%s, bandwidth=%ld, "
+              "flags=%x",
+              mon, device, file, NULLSTR(format), bandwidth, flags);
+
+    /* Convert bandwidth MiB to bytes */
+    speed = bandwidth;
+    if (speed > ULLONG_MAX / 1024 / 1024) {
+        virReportError(VIR_ERR_OVERFLOW,
+                       _("bandwidth must be less than %llu"),
+                       ULLONG_MAX / 1024 / 1024);
+        return -1;
+    }
+    speed <<= 20;
+
+    if (mon->json)
+        ret = qemuMonitorJSONDriveMirror(mon, device, file, format, speed,
+                                         flags);
+    else
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                       _("drive-mirror requires JSON monitor"));
+    return ret;
+}
+
 /* Use the transaction QMP command to run atomic snapshot commands.  */
 int
 qemuMonitorTransaction(qemuMonitorPtr mon, virJSONValuePtr actions)
@@ -2783,6 +2826,55 @@ qemuMonitorTransaction(qemuMonitorPtr mon, virJSONValuePtr actions)
     else
         virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
                        _("transaction requires JSON monitor"));
+    return ret;
+}
+
+/* Start a block-commit block job.  bandwidth is in MiB/sec.  */
+int
+qemuMonitorBlockCommit(qemuMonitorPtr mon, const char *device,
+                       const char *top, const char *base,
+                       unsigned long bandwidth)
+{
+    int ret = -1;
+    unsigned long long speed;
+
+    VIR_DEBUG("mon=%p, device=%s, top=%s, base=%s, bandwidth=%ld",
+              mon, device, NULLSTR(top), NULLSTR(base), bandwidth);
+
+    /* Convert bandwidth MiB to bytes */
+    speed = bandwidth;
+    if (speed > ULLONG_MAX / 1024 / 1024) {
+        virReportError(VIR_ERR_OVERFLOW,
+                       _("bandwidth must be less than %llu"),
+                       ULLONG_MAX / 1024 / 1024);
+        return -1;
+    }
+    speed <<= 20;
+
+    if (mon->json)
+        ret = qemuMonitorJSONBlockCommit(mon, device, top, base, speed);
+    else
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                       _("block-commit requires JSON monitor"));
+    return ret;
+}
+
+/* Use the block-job-complete monitor command to pivot a block copy
+ * job.  */
+int
+qemuMonitorDrivePivot(qemuMonitorPtr mon, const char *device,
+                      const char *file, const char *format)
+{
+    int ret = -1;
+
+    VIR_DEBUG("mon=%p, device=%s, file=%s, format=%s",
+              mon, device, file, NULLSTR(format));
+
+    if (mon->json)
+        ret = qemuMonitorJSONDrivePivot(mon, device, file, format);
+    else
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                       _("drive pivot requires JSON monitor"));
     return ret;
 }
 
@@ -2853,7 +2945,7 @@ int qemuMonitorScreendump(qemuMonitorPtr mon,
     return ret;
 }
 
-/* bandwidth is in MB/sec */
+/* bandwidth is in MiB/sec */
 int qemuMonitorBlockJob(qemuMonitorPtr mon,
                         const char *device,
                         const char *base,
@@ -3140,6 +3232,29 @@ int qemuMonitorGetEvents(qemuMonitorPtr mon,
     }
 
     return qemuMonitorJSONGetEvents(mon, events);
+}
+
+
+int qemuMonitorGetKVMState(qemuMonitorPtr mon,
+                           bool *enabled,
+                           bool *present)
+{
+    VIR_DEBUG("mon=%p enabled=%p present=%p",
+              mon, enabled, present);
+
+    if (!mon) {
+        virReportError(VIR_ERR_INVALID_ARG, "%s",
+                       _("monitor must not be NULL"));
+        return -1;
+    }
+
+    if (!mon->json) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                       _("JSON monitor is required"));
+        return -1;
+    }
+
+    return qemuMonitorJSONGetKVMState(mon, enabled, present);
 }
 
 

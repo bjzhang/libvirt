@@ -3,7 +3,7 @@ dnl Process this file with autoconf to produce a configure script.
 dnl Copyright (C) 2005-2012 Red Hat, Inc.
 dnl See COPYING.LIB for the License of this software
 
-AC_INIT([libvirt], [0.10.2], [libvir-list@redhat.com], [], [http://libvirt.org])
+AC_INIT([libvirt], [1.0.0], [libvir-list@redhat.com], [], [http://libvirt.org])
 AC_CONFIG_SRCDIR([src/libvirt.c])
 AC_CONFIG_AUX_DIR([build-aux])
 AC_CONFIG_HEADERS([config.h])
@@ -1216,6 +1216,13 @@ if test "x$with_sanlock" != "xno"; then
   if test "x$with_sanlock" = "xyes" ; then
     AC_DEFINE_UNQUOTED([HAVE_SANLOCK], 1,
       [whether Sanlock plugin for lock management is available])
+
+    AC_CHECK_LIB([sanlock_client], [sanlock_killpath],
+                 [sanlock_killpath=yes], [sanlock_killpath=no])
+    if test "x$sanlock_killpath" = "xyes" ; then
+      AC_DEFINE_UNQUOTED([HAVE_SANLOCK_KILLPATH], 1,
+        [whether Sanlock supports sanlock_killpath])
+    fi
   fi
 fi
 AM_CONDITIONAL([HAVE_SANLOCK], [test "x$with_sanlock" = "xyes"])
@@ -1351,7 +1358,7 @@ if test "x$with_avahi" = "xyes" || test "x$with_avahi" = "xcheck"; then
   ])
   if test "x$with_avahi" = "xyes" ; then
     AC_DEFINE_UNQUOTED([HAVE_AVAHI], 1,
-      [whether Avahi is used to broadcast server presense])
+      [whether Avahi is used to broadcast server presence])
   fi
 fi
 AC_SUBST([AVAHI_CFLAGS])
@@ -1440,14 +1447,14 @@ if test "$with_selinux" != "no"; then
   old_libs="$LIBS"
   if test "$with_selinux" = "check"; then
     AC_CHECK_HEADER([selinux/selinux.h],[],[with_selinux=no])
-    AC_CHECK_LIB([selinux], [fgetfilecon],[],[with_selinux=no])
+    AC_CHECK_LIB([selinux], [fgetfilecon_raw],[],[with_selinux=no])
     if test "$with_selinux" != "no"; then
       with_selinux="yes"
     fi
   else
     fail=0
     AC_CHECK_HEADER([selinux/selinux.h],[],[fail=1])
-    AC_CHECK_LIB([selinux], [fgetfilecon],[],[fail=1])
+    AC_CHECK_LIB([selinux], [fgetfilecon_raw],[],[fail=1])
     test $fail = 1 &&
       AC_MSG_ERROR([You must install the libselinux development package in order to compile libvirt with basic SELinux support])
   fi
@@ -1486,10 +1493,11 @@ AC_ARG_WITH([secdriver-selinux],
 if test "$with_selinux" != "yes" ; then
   if test "$with_secdriver_selinux" = "check" ; then
     with_secdriver_selinux=no
-  elif test "$with_secdriver_selinux" = "yes"; then
+  fi
+  if test "$with_secdriver_selinux" != "no"; then
         AC_MSG_ERROR([You must install the libselinux development package and enable SELinux with the --with-selinux=yes in order to compile libvirt --with-secdriver-selinux=yes])
   fi
-else
+elif test "$with_secdriver_selinux" != "no"; then
   old_cflags="$CFLAGS"
   old_libs="$LIBS"
   CFLAGS="$CFLAGS $SELINUX_CFLAGS"
@@ -1564,10 +1572,11 @@ AC_ARG_WITH([secdriver-apparmor],
 if test "$with_apparmor" != "yes" ; then
   if test "$with_secdriver_apparmor" = "check" ; then
     with_secdriver_apparmor=no
-  else
+  fi
+  if test "$with_secdriver_apparmor" != "no" ; then
     AC_MSG_ERROR([You must install the AppArmor development package in order to compile libvirt])
   fi
-else
+elif test "with_secdriver_apparmor" != "no" ; then
   old_cflags="$CFLAGS"
   old_libs="$LIBS"
   CFLAGS="$CFLAGS $APPARMOR_CFLAGS"

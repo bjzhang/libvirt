@@ -43,6 +43,7 @@
 #include "virnetdevtap.h"
 #include "base64.h"
 #include "device_conf.h"
+#include "storage_file.h"
 
 #include <sys/utsname.h>
 #include <sys/stat.h>
@@ -170,12 +171,26 @@ qemuPhysIfaceConnect(virDomainDefPtr def,
         vmop, driver->stateDir,
         virDomainNetGetActualBandwidth(net));
     if (rc >= 0) {
+        if (virSecurityManagerSetTapFDLabel(driver->securityManager,
+                                            def, rc) < 0)
+            goto error;
+
         virDomainAuditNetDevice(def, net, res_ifname, true);
         VIR_FREE(net->ifname);
         net->ifname = res_ifname;
     }
 
     return rc;
+
+error:
+    ignore_value(virNetDevMacVLanDeleteWithVPortProfile(
+                     res_ifname, &net->mac,
+                     virDomainNetGetActualDirectDev(net),
+                     virDomainNetGetActualDirectMode(net),
+                     virDomainNetGetActualVirtPortProfile(net),
+                     driver->stateDir));
+    VIR_FREE(res_ifname);
+    return -1;
 }
 
 
@@ -2128,11 +2143,10 @@ qemuBuildDriveStr(virConnectPtr conn ATTRIBUTE_UNUSED,
           disk->tray_status == VIR_DOMAIN_DISK_TRAY_OPEN)) {
         if (disk->type == VIR_DOMAIN_DISK_TYPE_DIR) {
             /* QEMU only supports magic FAT format for now */
-            if (disk->driverType &&
-                STRNEQ(disk->driverType, "fat")) {
+            if (disk->format > 0 && disk->format != VIR_STORAGE_FILE_FAT) {
                 virReportError(VIR_ERR_INTERNAL_ERROR,
                                _("unsupported disk driver type for '%s'"),
-                               disk->driverType);
+                               virStorageFileFormatTypeToString(disk->format));
                 goto error;
             }
             if (!disk->readonly) {
@@ -2229,10 +2243,11 @@ qemuBuildDriveStr(virConnectPtr conn ATTRIBUTE_UNUSED,
                        _("transient disks not supported yet"));
         goto error;
     }
-    if (disk->driverType && *disk->driverType != '\0' &&
+    if (disk->format > 0 &&
         disk->type != VIR_DOMAIN_DISK_TYPE_DIR &&
         qemuCapsGet(caps, QEMU_CAPS_DRIVE_FORMAT))
-        virBufferAsprintf(&opt, ",format=%s", disk->driverType);
+        virBufferAsprintf(&opt, ",format=%s",
+                          virStorageFileFormatTypeToString(disk->format));
 
     /* generate geometry command string */
     if (disk->geometry.cylinders > 0 &&
@@ -2609,6 +2624,9 @@ qemuBuildDriveDevStr(virDomainDefPtr def,
         break;
     case VIR_DOMAIN_DISK_BUS_USB:
         virBufferAddLit(&opt, "usb-storage");
+
+        if (qemuBuildDeviceAddressStr(&opt, &disk->info, caps) < 0)
+            goto error;
         break;
     default:
         virReportError(VIR_ERR_INTERNAL_ERROR,
@@ -3507,17 +3525,21 @@ qemuBuildUSBHostdevDevStr(virDomainHostdevDefPtr dev,
 {
     virBuffer buf = VIR_BUFFER_INITIALIZER;
 
-    if (!dev->source.subsys.u.usb.bus &&
+    if (!dev->missing &&
+        !dev->source.subsys.u.usb.bus &&
         !dev->source.subsys.u.usb.device) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                        _("USB host device is missing bus/device information"));
         return NULL;
     }
 
-    virBufferAsprintf(&buf, "usb-host,hostbus=%d,hostaddr=%d,id=%s",
-                      dev->source.subsys.u.usb.bus,
-                      dev->source.subsys.u.usb.device,
-                      dev->info->alias);
+    virBufferAddLit(&buf, "usb-host");
+    if (!dev->missing) {
+        virBufferAsprintf(&buf, ",hostbus=%d,hostaddr=%d",
+                          dev->source.subsys.u.usb.bus,
+                          dev->source.subsys.u.usb.device);
+    }
+    virBufferAsprintf(&buf, ",id=%s", dev->info->alias);
 
     if (qemuBuildDeviceAddressStr(&buf, dev->info, caps) < 0)
         goto error;
@@ -3576,6 +3598,12 @@ char *
 qemuBuildUSBHostdevUsbDevStr(virDomainHostdevDefPtr dev)
 {
     char *ret = NULL;
+
+    if (dev->missing) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                       _("This QEMU doesn't not support missing USB devices"));
+        return NULL;
+    }
 
     if (!dev->source.subsys.u.usb.bus &&
         !dev->source.subsys.u.usb.device) {
@@ -4090,6 +4118,7 @@ qemuBuildCpuArgStr(const struct qemud_driver *driver,
         int hasSVM;
 
         if (!host ||
+            !host->model ||
             (ncpus = qemuCapsGetCPUDefinitions(caps, &cpus)) == 0) {
             virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
                            _("CPU specification not supported by hypervisor"));
@@ -4217,7 +4246,7 @@ qemuBuildCpuArgStr(const struct qemud_driver *driver,
 
     if (def->apic_eoi) {
         char sign;
-        if (def->apic_eoi == VIR_DOMAIN_APIC_EOI_ON)
+        if (def->apic_eoi == VIR_DOMAIN_FEATURE_STATE_ON)
             sign = '+';
         else
             sign = '-';
@@ -4226,6 +4255,26 @@ qemuBuildCpuArgStr(const struct qemud_driver *driver,
                           have_cpu ? "" : default_model,
                           sign);
         have_cpu = true;
+    }
+
+    if (def->features & (1 << VIR_DOMAIN_FEATURE_HYPERV)) {
+        if (!have_cpu) {
+            virBufferAdd(&buf, default_model, -1);
+            have_cpu = true;
+        }
+
+        for (i = 0; i < VIR_DOMAIN_HYPERV_LAST; i++) {
+            switch ((enum virDomainHyperv) i) {
+            case VIR_DOMAIN_HYPERV_RELAXED:
+                if (def->hyperv_features[i] == VIR_DOMAIN_FEATURE_STATE_ON)
+                    virBufferAsprintf(&buf, ",hv_%s",
+                                      virDomainHypervTypeToString(i));
+                break;
+
+            case VIR_DOMAIN_HYPERV_LAST:
+                break;
+            }
+        }
     }
 
     if (virBufferError(&buf))
@@ -5034,6 +5083,20 @@ qemuBuildCommandLine(virConnectPtr conn,
         }
     }
 
+    if (usbcontroller == 0)
+        virCommandAddArg(cmd, "-usb");
+
+    for (i = 0 ; i < def->nhubs ; i++) {
+        virDomainHubDefPtr hub = def->hubs[i];
+        char *optstr;
+
+        virCommandAddArg(cmd, "-device");
+        if (!(optstr = qemuBuildHubDevStr(hub, caps)))
+            goto error;
+        virCommandAddArg(cmd, optstr);
+        VIR_FREE(optstr);
+    }
+
     /* If QEMU supports -drive param instead of old -hda, -hdb, -cdrom .. */
     if (qemuCapsGet(caps, QEMU_CAPS_DRIVE)) {
         int bootCD = 0, bootFloppy = 0, bootDisk = 0;
@@ -5199,11 +5262,10 @@ qemuBuildCommandLine(virConnectPtr conn,
 
             if (disk->type == VIR_DOMAIN_DISK_TYPE_DIR) {
                 /* QEMU only supports magic FAT format for now */
-                if (disk->driverType &&
-                    STRNEQ(disk->driverType, "fat")) {
+                if (disk->format > 0 && disk->format != VIR_STORAGE_FILE_FAT) {
                     virReportError(VIR_ERR_INTERNAL_ERROR,
                                    _("unsupported disk driver type for '%s'"),
-                                   disk->driverType);
+                                   virStorageFileFormatTypeToString(disk->format));
                     goto error;
                 }
                 if (!disk->readonly) {
@@ -5769,20 +5831,6 @@ qemuBuildCommandLine(virConnectPtr conn,
         }
     }
 
-    if (usbcontroller == 0)
-        virCommandAddArg(cmd, "-usb");
-
-    for (i = 0 ; i < def->nhubs ; i++) {
-        virDomainHubDefPtr hub = def->hubs[i];
-        char *optstr;
-
-        virCommandAddArg(cmd, "-device");
-        if (!(optstr = qemuBuildHubDevStr(hub, caps)))
-            goto error;
-        virCommandAddArg(cmd, optstr);
-        VIR_FREE(optstr);
-    }
-
     for (i = 0 ; i < def->ninputs ; i++) {
         virDomainInputDefPtr input = def->inputs[i];
 
@@ -5811,6 +5859,12 @@ qemuBuildCommandLine(virConnectPtr conn,
     if ((def->ngraphics == 1) &&
         def->graphics[0]->type == VIR_DOMAIN_GRAPHICS_TYPE_VNC) {
         virBuffer opt = VIR_BUFFER_INITIALIZER;
+
+        if (!qemuCapsGet(caps, QEMU_CAPS_VNC)) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                           _("vnc graphics are not supported with this QEMU"));
+            goto error;
+        }
 
         if (def->graphics[0]->data.vnc.socket ||
             driver->vncAutoUnixSocket) {
@@ -7010,7 +7064,7 @@ qemuParseCommandLineDisk(virCapsPtr caps,
                 virReportOOMError();
                 goto cleanup;
             }
-            def->driverType = values[i];
+            def->format = virStorageFileFormatTypeFromString(values[i]);
             values[i] = NULL;
         } else if (STREQ(keywords[i], "cache")) {
             if (STREQ(values[i], "off") ||
@@ -7694,8 +7748,7 @@ qemuParseCommandLineCPU(virDomainDefPtr dom,
                 cpu->model = model;
                 model = NULL;
             }
-        }
-        else if (*p == '+' || *p == '-') {
+        } else if (*p == '+' || *p == '-') {
             char *feature;
             int policy;
             int ret = 0;
@@ -7747,9 +7800,9 @@ qemuParseCommandLineCPU(virDomainDefPtr dom,
                 dom->clock.timers[i]->present = present;
             } else if (STREQ(feature, "kvm_pv_eoi")) {
                 if (policy == VIR_CPU_FEATURE_REQUIRE)
-                    dom->apic_eoi = VIR_DOMAIN_APIC_EOI_ON;
+                    dom->apic_eoi = VIR_DOMAIN_FEATURE_STATE_ON;
                 else
-                    dom->apic_eoi = VIR_DOMAIN_APIC_EOI_OFF;
+                    dom->apic_eoi = VIR_DOMAIN_FEATURE_STATE_OFF;
             } else {
                 if (!cpu) {
                     if (!(cpu = qemuInitGuestCPU(dom)))
@@ -7765,6 +7818,41 @@ qemuParseCommandLineCPU(virDomainDefPtr dom,
             VIR_FREE(feature);
             if (ret < 0)
                 goto error;
+        } else if (STRPREFIX(p, "hv_")) {
+            char *feature;
+            int f;
+            p += 3; /* "hv_" */
+
+            if (*p == '\0' || *p == ',')
+                goto syntax;
+
+            if (next)
+                feature = strndup(p, next - p - 1);
+            else
+                feature = strdup(p);
+
+            if (!feature)
+                goto no_memory;
+
+            dom->features |= (1 << VIR_DOMAIN_FEATURE_HYPERV);
+
+            if ((f = virDomainHypervTypeFromString(feature)) < 0) {
+                virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                               _("unsupported HyperV Enlightenment feature "
+                                 "'%s'"), feature);
+                goto error;
+            }
+
+            switch ((enum virDomainHyperv) f) {
+            case VIR_DOMAIN_HYPERV_RELAXED:
+                dom->hyperv_features[f] = VIR_DOMAIN_FEATURE_STATE_ON;
+                break;
+
+            case VIR_DOMAIN_HYPERV_LAST:
+                break;
+            }
+
+            VIR_FREE(feature);
         }
     } while ((p = next));
 
@@ -8678,6 +8766,17 @@ virDomainDefPtr qemuParseCommandLine(virCapsPtr caps,
                            _("found no rbd hosts in CEPH_ARGS '%s'"), ceph_args);
             goto error;
         }
+    }
+
+    if (!def->os.machine) {
+        const char *defaultMachine =
+                        virCapabilitiesDefaultGuestMachine(caps,
+                                                           def->os.type,
+                                                           def->os.arch,
+                                                           virDomainVirtTypeToString(def->virtType));
+        if (defaultMachine != NULL)
+            if (!(def->os.machine = strdup(defaultMachine)))
+                goto no_memory;
     }
 
     if (!nographics && def->ngraphics == 0) {

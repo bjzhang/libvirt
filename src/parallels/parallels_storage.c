@@ -123,6 +123,8 @@ parallelsStorageOpen(virConnectPtr conn,
     virStorageDriverStatePtr storageState;
     int privileged = (geteuid() == 0);
     parallelsConnPtr privconn = conn->privateData;
+    size_t i;
+
     virCheckFlags(VIR_CONNECT_RO, VIR_DRV_OPEN_ERROR);
 
     if (STRNEQ(conn->driver->name, "Parallels"))
@@ -176,7 +178,7 @@ parallelsStorageOpen(virConnectPtr conn,
         goto error;
     }
 
-    for (size_t i = 0; i < privconn->pools.count; i++) {
+    for (i = 0; i < privconn->pools.count; i++) {
         virStoragePoolObjLock(privconn->pools.objs[i]);
         virStoragePoolObjPtr pool;
 
@@ -971,8 +973,7 @@ parallelsStorageVolumeDefine(virStoragePoolObjPtr pool,
         if (!xml_path)
             goto cleanup;
 
-        if (virXMLSaveFile(xml_path, privvol->name,
-                           "volume-create", xmldesc)) {
+        if (virXMLSaveFile(xml_path, NULL, "volume-create", xmldesc)) {
             virReportError(VIR_ERR_OPERATION_FAILED, "%s",
                            _("Can't create file with volume description"));
             goto cleanup;

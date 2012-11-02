@@ -358,8 +358,6 @@ virSecurityDACSetSecurityImageLabel(virSecurityManagerPtr mgr,
                                     virDomainDiskDefPtr disk)
 
 {
-    uid_t user;
-    gid_t group;
     void *params[2];
     virSecurityDACDataPtr priv = virSecurityManagerGetPrivateData(mgr);
 
@@ -369,15 +367,10 @@ virSecurityDACSetSecurityImageLabel(virSecurityManagerPtr mgr,
     if (disk->type == VIR_DOMAIN_DISK_TYPE_NETWORK)
         return 0;
 
-    if (virSecurityDACGetImageIds(def, priv, &user, &group))
-        return -1;
-
     params[0] = mgr;
     params[1] = def;
     return virDomainDiskDefForeachPath(disk,
-                                       virSecurityManagerGetAllowDiskFormatProbing(mgr),
                                        false,
-                                       user, group,
                                        virSecurityDACSetSecurityFileLabel,
                                        params);
 }
@@ -495,9 +488,13 @@ virSecurityDACSetSecurityHostdevLabel(virSecurityManagerPtr mgr,
 
     switch (dev->source.subsys.type) {
     case VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_USB: {
-        usbDevice *usb = usbGetDevice(dev->source.subsys.u.usb.bus,
-                                      dev->source.subsys.u.usb.device);
+        usbDevice *usb;
 
+        if (dev->missing)
+            return 0;
+
+        usb = usbGetDevice(dev->source.subsys.u.usb.bus,
+                           dev->source.subsys.u.usb.device);
         if (!usb)
             goto done;
 
@@ -568,9 +565,13 @@ virSecurityDACRestoreSecurityHostdevLabel(virSecurityManagerPtr mgr,
 
     switch (dev->source.subsys.type) {
     case VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_USB: {
-        usbDevice *usb = usbGetDevice(dev->source.subsys.u.usb.bus,
-                                      dev->source.subsys.u.usb.device);
+        usbDevice *usb;
 
+        if (dev->missing)
+            return 0;
+
+        usb = usbGetDevice(dev->source.subsys.u.usb.bus,
+                           dev->source.subsys.u.usb.device);
         if (!usb)
             goto done;
 
@@ -858,7 +859,8 @@ virSecurityDACSetProcessLabel(virSecurityManagerPtr mgr,
     if (virSecurityDACGetIds(def, priv, &user, &group))
         return -1;
 
-    VIR_DEBUG("Dropping privileges of DEF to %u:%u", user, group);
+    VIR_DEBUG("Dropping privileges of DEF to %u:%u",
+              (unsigned int) user, (unsigned int) group);
 
     if (virSetUIDGID(user, group) < 0)
         return -1;
@@ -919,7 +921,9 @@ virSecurityDACGenLabel(virSecurityManagerPtr mgr,
         }
         break;
     case VIR_DOMAIN_SECLABEL_DYNAMIC:
-        if (virAsprintf(&seclabel->label, "%d:%d", priv->user, priv->group) < 0) {
+        if (virAsprintf(&seclabel->label, "%u:%u",
+                        (unsigned int) priv->user,
+                        (unsigned int) priv->group) < 0) {
             virReportOOMError();
             return rc;
         }
@@ -1021,6 +1025,14 @@ virSecurityDACSetImageFDLabel(virSecurityManagerPtr mgr ATTRIBUTE_UNUSED,
     return 0;
 }
 
+static int
+virSecurityDACSetTapFDLabel(virSecurityManagerPtr mgr ATTRIBUTE_UNUSED,
+                            virDomainDefPtr def ATTRIBUTE_UNUSED,
+                            int fd ATTRIBUTE_UNUSED)
+{
+    return 0;
+}
+
 static char *virSecurityDACGetMountOptions(virSecurityManagerPtr mgr ATTRIBUTE_UNUSED,
                                            virDomainDefPtr vm ATTRIBUTE_UNUSED) {
     return NULL;
@@ -1062,6 +1074,7 @@ virSecurityDriver virSecurityDriverDAC = {
     .domainRestoreSavedStateLabel       = virSecurityDACRestoreSavedStateLabel,
 
     .domainSetSecurityImageFDLabel      = virSecurityDACSetImageFDLabel,
+    .domainSetSecurityTapFDLabel        = virSecurityDACSetTapFDLabel,
 
     .domainGetSecurityMountOptions      = virSecurityDACGetMountOptions,
 };

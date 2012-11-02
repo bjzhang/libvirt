@@ -58,6 +58,11 @@
 
 #define VIR_FROM_THIS VIR_FROM_NONE
 
+#ifdef __UCLIBC__
+/* uclibc does not implement mkostemp GNU extention */
+#define mkostemp(x,y) mkstemp(x)
+#endif
+
 VIR_ENUM_DECL(virLogSource)
 VIR_ENUM_IMPL(virLogSource, VIR_LOG_FROM_LAST,
               "file",
@@ -1081,7 +1086,7 @@ virLogOutputToJournald(virLogSource source,
     char priostr[INT_BUFSIZE_BOUND(priority)];
     char linestr[INT_BUFSIZE_BOUND(linenr)];
 
-    /* First message takes upto 4 iovecs, and each
+    /* First message takes up to 4 iovecs, and each
      * other field needs 3, assuming they don't have
      * newlines in them
      */
@@ -1090,7 +1095,7 @@ virLogOutputToJournald(virLogSource source,
 
     if (strchr(rawstr, '\n')) {
         uint64_t nstr;
-        /* If 'str' containes a newline, then we must
+        /* If 'str' contains a newline, then we must
          * encode the string length, since we can't
          * rely on the newline for the field separator
          */
@@ -1246,6 +1251,8 @@ virLogParseOutputs(const char *outputs)
 
     if (cur == NULL)
         return -1;
+
+    VIR_DEBUG("outputs=%s", outputs);
 
     virSkipSpaces(&cur);
     while (*cur != 0) {

@@ -59,6 +59,7 @@
 #include "command.h"
 #include "virrandom.h"
 #include "viruri.h"
+#include "threads.h"
 
 #ifdef WITH_TEST
 # include "test/test_driver.h"
@@ -119,7 +120,7 @@ static int virNWFilterDriverTabCount = 0;
 static virStateDriverPtr virStateDriverTab[MAX_DRIVERS];
 static int virStateDriverTabCount = 0;
 #endif
-static int initialized = 0;
+
 
 #if defined(POLKIT_AUTH)
 static int virConnectAuthGainPolkit(const char *privilege) {
@@ -391,29 +392,16 @@ static struct gcry_thread_cbs virTLSThreadImpl = {
         }                                                       \
     } while (0)
 
-/**
- * virInitialize:
- *
- * Initialize the library. It's better to call this routine at startup
- * in multithreaded applications to avoid potential race when initializing
- * the library.
- *
- * Calling virInitialize is mandatory, unless your first API call is one of
- * virConnectOpen*.
- *
- * Returns 0 in case of success, -1 in case of error
- */
-int
-virInitialize(void)
+
+static bool virGlobalError = false;
+static virOnceControl virGlobalOnce = VIR_ONCE_CONTROL_INITIALIZER;
+
+static void
+virGlobalInit(void)
 {
-    if (initialized)
-        return 0;
-
-    initialized = 1;
-
     if (virThreadInitialize() < 0 ||
         virErrorInitialize() < 0)
-        return -1;
+        goto error;
 
     gcry_control(GCRYCTL_SET_THREAD_CBS, &virTLSThreadImpl);
     gcry_check_version(NULL);
@@ -429,47 +417,87 @@ virInitialize(void)
     VIR_DEBUG("register drivers");
 
 #if HAVE_WINSOCK2_H
-    if (winsock_init () == -1) return -1;
+    if (winsock_init () == -1)
+        goto error;
 #endif
 
     if (!bindtextdomain(PACKAGE, LOCALEDIR))
-        return -1;
+        goto error;
 
     /*
      * Note that the order is important: the first ones have a higher
      * priority when calling virConnectOpen.
      */
 #ifdef WITH_TEST
-    if (testRegister() == -1) return -1;
+    if (testRegister() == -1)
+        goto error;
 #endif
 #ifdef WITH_OPENVZ
-    if (openvzRegister() == -1) return -1;
+    if (openvzRegister() == -1)
+        goto error;
 #endif
 #ifdef WITH_VMWARE
-    if (vmwareRegister() == -1) return -1;
+    if (vmwareRegister() == -1)
+        goto error;
 #endif
 #ifdef WITH_PHYP
-    if (phypRegister() == -1) return -1;
+    if (phypRegister() == -1)
+        goto error;
 #endif
 #ifdef WITH_VBOX
-    if (vboxRegister() == -1) return -1;
+    if (vboxRegister() == -1)
+        goto error;
 #endif
 #ifdef WITH_ESX
-    if (esxRegister() == -1) return -1;
+    if (esxRegister() == -1)
+        goto error;
 #endif
 #ifdef WITH_HYPERV
-    if (hypervRegister() == -1) return -1;
+    if (hypervRegister() == -1)
+        goto error;
 #endif
 #ifdef WITH_XENAPI
-    if (xenapiRegister() == -1) return -1;
+    if (xenapiRegister() == -1)
+        goto error;
 #endif
 #ifdef WITH_PARALLELS
-    if (parallelsRegister() == -1) return -1;
+    if (parallelsRegister() == -1)
+        goto error;
 #endif
 #ifdef WITH_REMOTE
-    if (remoteRegister () == -1) return -1;
+    if (remoteRegister () == -1)
+        goto error;
 #endif
 
+    return;
+
+error:
+    virGlobalError = true;
+}
+
+/**
+ * virInitialize:
+ *
+ * Initialize the library.
+ *
+ * This method is invoked automatically by any of the virConnectOpen API
+ * calls. Since release 1.0.0, there is no need to call this method even
+ * in a multithreaded application, since initialization is performed in
+ * a thread safe manner.
+ *
+ * The only time it would be necessary to call virInitialize is if the
+ * application did not invoke virConnectOpen as its first API call.
+ *
+ * Returns 0 in case of success, -1 in case of error
+ */
+int
+virInitialize(void)
+{
+    if (virOnce(&virGlobalOnce, virGlobalInit) < 0)
+        return -1;
+
+    if (virGlobalError)
+        return -1;
     return 0;
 }
 
@@ -553,9 +581,6 @@ DllMain (HINSTANCE instance ATTRIBUTE_UNUSED,
 int
 virRegisterNetworkDriver(virNetworkDriverPtr driver)
 {
-    if (virInitialize() < 0)
-      return -1;
-
     virCheckNonNullArgReturn(driver, -1);
 
     if (virNetworkDriverTabCount >= MAX_DRIVERS) {
@@ -583,9 +608,6 @@ virRegisterNetworkDriver(virNetworkDriverPtr driver)
 int
 virRegisterInterfaceDriver(virInterfaceDriverPtr driver)
 {
-    if (virInitialize() < 0)
-      return -1;
-
     virCheckNonNullArgReturn(driver, -1);
 
     if (virInterfaceDriverTabCount >= MAX_DRIVERS) {
@@ -613,9 +635,6 @@ virRegisterInterfaceDriver(virInterfaceDriverPtr driver)
 int
 virRegisterStorageDriver(virStorageDriverPtr driver)
 {
-    if (virInitialize() < 0)
-      return -1;
-
     virCheckNonNullArgReturn(driver, -1);
 
     if (virStorageDriverTabCount >= MAX_DRIVERS) {
@@ -643,9 +662,6 @@ virRegisterStorageDriver(virStorageDriverPtr driver)
 int
 virRegisterDeviceMonitor(virDeviceMonitorPtr driver)
 {
-    if (virInitialize() < 0)
-      return -1;
-
     virCheckNonNullArgReturn(driver, -1);
 
     if (virDeviceMonitorTabCount >= MAX_DRIVERS) {
@@ -673,9 +689,6 @@ virRegisterDeviceMonitor(virDeviceMonitorPtr driver)
 int
 virRegisterSecretDriver(virSecretDriverPtr driver)
 {
-    if (virInitialize() < 0)
-      return -1;
-
     virCheckNonNullArgReturn(driver, -1);
 
     if (virSecretDriverTabCount >= MAX_DRIVERS) {
@@ -703,9 +716,6 @@ virRegisterSecretDriver(virSecretDriverPtr driver)
 int
 virRegisterNWFilterDriver(virNWFilterDriverPtr driver)
 {
-    if (virInitialize() < 0)
-      return -1;
-
     virCheckNonNullArgReturn(driver, -1);
 
     if (virNWFilterDriverTabCount >= MAX_DRIVERS) {
@@ -736,9 +746,6 @@ virRegisterDriver(virDriverPtr driver)
 {
     VIR_DEBUG("driver=%p name=%s", driver, driver ? NULLSTR(driver->name) : "(null)");
 
-    if (virInitialize() < 0)
-        return -1;
-
     virCheckNonNullArgReturn(driver, -1);
 
     if (virDriverTabCount >= MAX_DRIVERS) {
@@ -767,9 +774,6 @@ virRegisterDriver(virDriverPtr driver)
 int
 virRegisterStateDriver(virStateDriverPtr driver)
 {
-    if (virInitialize() < 0)
-      return -1;
-
     virCheckNonNullArgReturn(driver, -1);
 
     if (virStateDriverTabCount >= MAX_DRIVERS) {
@@ -895,9 +899,8 @@ virGetVersion(unsigned long *libVer, const char *type ATTRIBUTE_UNUSED,
 {
     VIR_DEBUG("libVir=%p, type=%s, typeVer=%p", libVer, type, typeVer);
 
-    if (!initialized)
-        if (virInitialize() < 0)
-            goto error;
+    if (virInitialize() < 0)
+        goto error;
 
     if (libVer == NULL)
         goto error;
@@ -1332,9 +1335,9 @@ virConnectPtr
 virConnectOpen (const char *name)
 {
     virConnectPtr ret = NULL;
-    if (!initialized)
-        if (virInitialize() < 0)
-            goto error;
+
+    if (virInitialize() < 0)
+        goto error;
 
     VIR_DEBUG("name=%s", name);
     virResetLastError();
@@ -1367,9 +1370,9 @@ virConnectPtr
 virConnectOpenReadOnly(const char *name)
 {
     virConnectPtr ret = NULL;
-    if (!initialized)
-        if (virInitialize() < 0)
-            goto error;
+
+    if (virInitialize() < 0)
+        goto error;
 
     VIR_DEBUG("name=%s", name);
     virResetLastError();
@@ -1406,9 +1409,9 @@ virConnectOpenAuth(const char *name,
                    unsigned int flags)
 {
     virConnectPtr ret = NULL;
-    if (!initialized)
-        if (virInitialize() < 0)
-            goto error;
+
+    if (virInitialize() < 0)
+        goto error;
 
     VIR_DEBUG("name=%s, auth=%p, flags=%x", NULLSTR(name), auth, flags);
     virResetLastError();
@@ -3091,7 +3094,7 @@ error:
  *
  * This call sets up a stream; subsequent use of stream API is necessary
  * to transfer actual data, determine how much data is successfully
- * transfered, and detect any errors.
+ * transferred, and detect any errors.
  *
  * The screen ID is the sequential number of screen. In case of multiple
  * graphics cards, heads are enumerated before devices, e.g. having
@@ -4617,6 +4620,7 @@ virDomainMigrateVersion2 (virDomainPtr domain,
     int cookielen = 0, ret;
     virDomainInfo info;
     virErrorPtr orig_err = NULL;
+    unsigned int getxml_flags = 0;
     int cancelled;
     VIR_DOMAIN_DEBUG(domain,
                      "dconn=%p, flags=%lx, dname=%s, uri=%s, bandwidth=%lu",
@@ -4643,9 +4647,15 @@ virDomainMigrateVersion2 (virDomainPtr domain,
         virDispatchError(domain->conn);
         return NULL;
     }
-    dom_xml = domain->conn->driver->domainGetXMLDesc(domain,
-                                                     VIR_DOMAIN_XML_SECURE |
-                                                     VIR_DOMAIN_XML_UPDATE_CPU);
+
+    if (VIR_DRV_SUPPORTS_FEATURE(domain->conn->driver, domain->conn,
+                                 VIR_DRV_FEATURE_XML_MIGRATABLE)) {
+        getxml_flags |= VIR_DOMAIN_XML_MIGRATABLE;
+    } else {
+        getxml_flags |= VIR_DOMAIN_XML_SECURE | VIR_DOMAIN_XML_UPDATE_CPU;
+    }
+
+    dom_xml = domain->conn->driver->domainGetXMLDesc(domain, getxml_flags);
     if (!dom_xml)
         return NULL;
 
@@ -13288,7 +13298,7 @@ virStorageVolGetKey(virStorageVolPtr vol)
 /**
  * virStorageVolCreateXML:
  * @pool: pointer to storage pool
- * @xmldesc: description of volume to create
+ * @xmlDesc: description of volume to create
  * @flags: extra flags; not used yet, so callers should always pass 0
  *
  * Create a storage volume within a pool based
@@ -13299,10 +13309,10 @@ virStorageVolGetKey(virStorageVolPtr vol)
  */
 virStorageVolPtr
 virStorageVolCreateXML(virStoragePoolPtr pool,
-                       const char *xmldesc,
+                       const char *xmlDesc,
                        unsigned int flags)
 {
-    VIR_DEBUG("pool=%p, flags=%x", pool, flags);
+    VIR_DEBUG("pool=%p, xmlDesc=%s, flags=%x", pool, xmlDesc, flags);
 
     virResetLastError();
 
@@ -13312,7 +13322,7 @@ virStorageVolCreateXML(virStoragePoolPtr pool,
         return NULL;
     }
 
-    virCheckNonNullArgGoto(xmldesc, error);
+    virCheckNonNullArgGoto(xmlDesc, error);
 
     if (pool->conn->flags & VIR_CONNECT_RO) {
         virLibConnError(VIR_ERR_OPERATION_DENIED, __FUNCTION__);
@@ -13321,7 +13331,7 @@ virStorageVolCreateXML(virStoragePoolPtr pool,
 
     if (pool->conn->storageDriver && pool->conn->storageDriver->volCreateXML) {
         virStorageVolPtr ret;
-        ret = pool->conn->storageDriver->volCreateXML (pool, xmldesc, flags);
+        ret = pool->conn->storageDriver->volCreateXML (pool, xmlDesc, flags);
         if (!ret)
             goto error;
         return ret;
@@ -13338,7 +13348,7 @@ error:
 /**
  * virStorageVolCreateXMLFrom:
  * @pool: pointer to parent pool for the new volume
- * @xmldesc: description of volume to create
+ * @xmlDesc: description of volume to create
  * @clonevol: storage volume to use as input
  * @flags: extra flags; not used yet, so callers should always pass 0
  *
@@ -13351,11 +13361,12 @@ error:
  */
 virStorageVolPtr
 virStorageVolCreateXMLFrom(virStoragePoolPtr pool,
-                           const char *xmldesc,
+                           const char *xmlDesc,
                            virStorageVolPtr clonevol,
                            unsigned int flags)
 {
-    VIR_DEBUG("pool=%p, flags=%x, clonevol=%p", pool, flags, clonevol);
+    VIR_DEBUG("pool=%p, xmlDesc=%s, clonevol=%p, flags=%x",
+              pool, xmlDesc, clonevol, flags);
 
     virResetLastError();
 
@@ -13370,7 +13381,7 @@ virStorageVolCreateXMLFrom(virStoragePoolPtr pool,
         goto error;
     }
 
-    virCheckNonNullArgGoto(xmldesc, error);
+    virCheckNonNullArgGoto(xmlDesc, error);
 
     if (pool->conn->flags & VIR_CONNECT_RO ||
         clonevol->conn->flags & VIR_CONNECT_RO) {
@@ -13381,7 +13392,7 @@ virStorageVolCreateXMLFrom(virStoragePoolPtr pool,
     if (pool->conn->storageDriver &&
         pool->conn->storageDriver->volCreateXMLFrom) {
         virStorageVolPtr ret;
-        ret = pool->conn->storageDriver->volCreateXMLFrom (pool, xmldesc,
+        ret = pool->conn->storageDriver->volCreateXMLFrom (pool, xmlDesc,
                                                            clonevol, flags);
         if (!ret)
             goto error;
@@ -14683,7 +14694,7 @@ error:
  * @cb: callback to the function handling domain events
  *
  * Removes a callback previously registered with the virConnectDomainEventRegister
- * funtion.
+ * function.
  *
  * Use of this method is no longer recommended. Instead applications
  * should try virConnectDomainEventUnregisterAny which has a more flexible
@@ -19209,9 +19220,10 @@ error:
  * mirror all further changes to both source and destination.  The user
  * must call virDomainBlockJobAbort() to end the mirroring while choosing
  * whether to revert to source or pivot to the destination.  An event is
- * issued when the job ends, and in the future, an event may be added when
- * the job transitions from pulling to mirroring.  If the job is aborted,
- * a new job will have to start over from the beginning of the first phase.
+ * issued when the job ends, and depending on the hypervisor, an event may
+ * also be issued when the job transitions from pulling to mirroring.  If
+ * the job is aborted, a new job will have to start over from the beginning
+ * of the first phase.
  *
  * Some hypervisors will restrict certain actions, such as virDomainSave()
  * or virDomainDetachDevice(), while a copy job is active; they may
@@ -19378,8 +19390,6 @@ int virDomainBlockCommit(virDomainPtr dom, const char *disk,
     }
 
     virCheckNonNullArgGoto(disk, error);
-    if (flags & VIR_DOMAIN_BLOCK_COMMIT_SHALLOW)
-        virCheckNullArgGoto(base, error);
 
     if (conn->driver->domainBlockCommit) {
         int ret;
@@ -20097,4 +20107,55 @@ virDomainGetHostname(virDomainPtr domain, unsigned int flags)
 error:
     virDispatchError(domain->conn);
     return NULL;
+}
+
+/**
+ * virNodeGetCPUMap:
+ * @conn: pointer to the hypervisor connection
+ * @cpumap: optional pointer to a bit map of real CPUs on the host node
+ *      (in 8-bit bytes) (OUT)
+ *      In case of success each bit set to 1 means that corresponding
+ *      CPU is online.
+ *      Bytes are stored in little-endian order: CPU0-7, 8-15...
+ *      In each byte, lowest CPU number is least significant bit.
+ *      The bit map is allocated by virNodeGetCPUMap and needs
+ *      to be released using free() by the caller.
+ * @online: optional number of online CPUs in cpumap (OUT)
+ *      Contains the number of online CPUs if the call was successful.
+ * @flags: extra flags; not used yet, so callers should always pass 0
+ *
+ * Get CPU map of host node CPUs.
+ *
+ * Returns number of CPUs present on the host node,
+ * or -1 if there was an error.
+ */
+int
+virNodeGetCPUMap(virConnectPtr conn,
+                 unsigned char **cpumap,
+                 unsigned int *online,
+                 unsigned int flags)
+{
+    VIR_DEBUG("conn=%p, cpumap=%p, online=%p, flags=%x",
+              conn, cpumap, online, flags);
+
+    virResetLastError();
+
+    if (!VIR_IS_CONNECT(conn)) {
+        virLibConnError(VIR_ERR_INVALID_CONN, __FUNCTION__);
+        virDispatchError(NULL);
+        return -1;
+    }
+
+    if (conn->driver->nodeGetCPUMap) {
+        int ret = conn->driver->nodeGetCPUMap(conn, cpumap, online, flags);
+        if (ret < 0)
+            goto error;
+        return ret;
+    }
+
+    virLibConnError(VIR_ERR_NO_SUPPORT, __FUNCTION__);
+
+error:
+    virDispatchError(conn);
+    return -1;
 }

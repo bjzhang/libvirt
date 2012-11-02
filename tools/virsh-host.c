@@ -271,6 +271,45 @@ cmdNodeinfo(vshControl *ctl, const vshCmd *cmd ATTRIBUTE_UNUSED)
 }
 
 /*
+ * "nodecpumap" command
+ */
+static const vshCmdInfo info_node_cpumap[] = {
+    {"help", N_("node cpu map")},
+    {"desc", N_("Displays the node's total number of CPUs, the number of"
+                " online CPUs and the list of online CPUs.")},
+    {NULL, NULL}
+};
+
+static bool
+cmdNodeCpuMap(vshControl *ctl, const vshCmd *cmd ATTRIBUTE_UNUSED)
+{
+    int cpu, cpunum;
+    unsigned char *cpumap = NULL;
+    unsigned int online;
+    bool ret = false;
+
+    cpunum = virNodeGetCPUMap(ctl->conn, &cpumap, &online, 0);
+    if (cpunum < 0) {
+        vshError(ctl, "%s", _("Unable to get cpu map"));
+        goto cleanup;
+    }
+
+    vshPrint(ctl, "%-15s %d\n", _("CPUs present:"), cpunum);
+    vshPrint(ctl, "%-15s %d\n", _("CPUs online:"), online);
+
+    vshPrint(ctl, "%-15s ", _("CPU map:"));
+    for (cpu = 0; cpu < cpunum; cpu++)
+        vshPrint(ctl, "%c", VIR_CPU_USED(cpumap, cpu) ? 'y' : '-');
+    vshPrint(ctl, "\n");
+
+    ret = true;
+
+  cleanup:
+    VIR_FREE(cpumap);
+    return ret;
+}
+
+/*
  * "nodecpustats" command
  */
 static const vshCmdInfo info_nodecpustats[] = {
@@ -467,7 +506,6 @@ static const vshCmdOptDef opts_node_suspend[] = {
     {"target", VSH_OT_DATA, VSH_OFLAG_REQ, N_("mem(Suspend-to-RAM), "
                                                "disk(Suspend-to-Disk), hybrid(Hybrid-Suspend)")},
     {"duration", VSH_OT_INT, VSH_OFLAG_REQ, N_("Suspend duration in seconds, at least 60")},
-    {"flags", VSH_OT_INT, VSH_OFLAG_NONE, N_("Suspend flags, 0 for default")},
     {NULL, 0, 0, NULL}
 };
 
@@ -477,7 +515,6 @@ cmdNodeSuspend(vshControl *ctl, const vshCmd *cmd)
     const char *target = NULL;
     unsigned int suspendTarget;
     long long duration;
-    unsigned int flags = 0;
 
     if (vshCommandOptString(cmd, "target", &target) < 0) {
         vshError(ctl, _("Invalid target argument"));
@@ -486,11 +523,6 @@ cmdNodeSuspend(vshControl *ctl, const vshCmd *cmd)
 
     if (vshCommandOptLongLong(cmd, "duration", &duration) < 0) {
         vshError(ctl, _("Invalid duration argument"));
-        return false;
-    }
-
-    if (vshCommandOptUInt(cmd, "flags", &flags) < 0) {
-        vshError(ctl, _("Invalid flags argument"));
         return false;
     }
 
@@ -510,8 +542,7 @@ cmdNodeSuspend(vshControl *ctl, const vshCmd *cmd)
         return false;
     }
 
-    if (virNodeSuspendForDuration(ctl->conn, suspendTarget, duration,
-                                  flags) < 0) {
+    if (virNodeSuspendForDuration(ctl->conn, suspendTarget, duration, 0) < 0) {
         vshError(ctl, "%s", _("The host was not suspended"));
         return false;
     }
@@ -920,6 +951,8 @@ static const vshCmdOptDef opts_node_memory_tune[] = {
     {"shm-sleep-millisecs", VSH_OT_INT, VSH_OFLAG_NONE,
       N_("number of millisecs the shared memory service should "
          "sleep before next scan")},
+    {"shm-merge-across-nodes", VSH_OT_INT, VSH_OFLAG_NONE,
+      N_("Specifies if pages from different numa nodes can be merged")},
     {NULL, 0, 0, NULL}
 };
 
@@ -931,6 +964,7 @@ cmdNodeMemoryTune(vshControl *ctl, const vshCmd *cmd)
     unsigned int flags = 0;
     unsigned int shm_pages_to_scan = 0;
     unsigned int shm_sleep_millisecs = 0;
+    unsigned int shm_merge_across_nodes = 0;
     bool ret = false;
     int i = 0;
 
@@ -946,10 +980,19 @@ cmdNodeMemoryTune(vshControl *ctl, const vshCmd *cmd)
         return false;
     }
 
+    if (vshCommandOptUInt(cmd, "shm-merge-across-nodes",
+                          &shm_merge_across_nodes) < 0) {
+        vshError(ctl, "%s", _("invalid shm-merge-across-nodes number"));
+        return false;
+    }
+
     if (shm_pages_to_scan)
         nparams++;
 
     if (shm_sleep_millisecs)
+        nparams++;
+
+    if (shm_merge_across_nodes)
         nparams++;
 
     if (nparams == 0) {
@@ -1003,6 +1046,14 @@ cmdNodeMemoryTune(vshControl *ctl, const vshCmd *cmd)
                 goto error;
         }
 
+        if (i < nparams && shm_merge_across_nodes) {
+            if (virTypedParameterAssign(&params[i++],
+                                        VIR_NODE_MEMORY_SHARED_MERGE_ACROSS_NODES,
+                                        VIR_TYPED_PARAM_UINT,
+                                        shm_merge_across_nodes) < 0)
+                goto error;
+        }
+
         if (virNodeSetMemoryParameters(ctl->conn, params, nparams, flags) != 0)
             goto error;
         else
@@ -1026,6 +1077,7 @@ const vshCmdDef hostAndHypervisorCmds[] = {
     {"hostname", cmdHostname, NULL, info_hostname, 0},
     {"node-memory-tune", cmdNodeMemoryTune,
      opts_node_memory_tune, info_node_memory_tune, 0},
+    {"nodecpumap", cmdNodeCpuMap, NULL, info_node_cpumap, 0},
     {"nodecpustats", cmdNodeCpuStats, opts_node_cpustats, info_nodecpustats, 0},
     {"nodeinfo", cmdNodeinfo, NULL, info_nodeinfo, 0},
     {"nodememstats", cmdNodeMemStats, opts_node_memstats, info_nodememstats, 0},

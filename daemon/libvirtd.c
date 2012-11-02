@@ -636,10 +636,13 @@ daemonSetupLogging(struct daemonConfig *config,
         virLogParseOutputs(config->log_outputs);
 
     /*
-     * If no defined outputs, then first try to direct it
-     * to the systemd journal (if it exists)....
+     * If no defined outputs, and either running
+     * as daemon or not on a tty, then first try
+     * to direct it to the systemd journal
+     * (if it exists)....
      */
-    if (virLogGetNbOutputs() == 0) {
+    if (virLogGetNbOutputs() == 0 &&
+        (godaemon || !isatty(STDIN_FILENO))) {
         char *tmp;
         if (access("/run/systemd/journal/socket", W_OK) >= 0) {
             if (virAsprintf(&tmp, "%d:journald", virLogGetDefaultPriority()) < 0)
@@ -933,7 +936,7 @@ libvirt management daemon:\n"), argv0);
       $XDG_CONFIG_HOME/libvirt/libvirtd.conf\n\
 \n\
     Sockets:\n\
-      $XDG_RUNTIME_DIR/libvirt/libvirt-sock (in UNIX abstract namespace)\n\
+      $XDG_RUNTIME_DIR/libvirt/libvirt-sock\n\
 \n\
     TLS:\n\
       CA certificate:     $HOME/.pki/libvirt/cacert.pem\n\
@@ -1216,6 +1219,7 @@ int main(int argc, char **argv) {
                                 !!config->keepalive_required,
                                 config->mdns_adv ? config->mdns_name : NULL,
                                 remoteClientInitHook,
+                                NULL,
                                 remoteClientFreeFunc,
                                 NULL))) {
         ret = VIR_DAEMON_ERR_INIT;

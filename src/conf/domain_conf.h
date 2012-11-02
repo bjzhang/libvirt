@@ -47,6 +47,7 @@
 # include "virobject.h"
 # include "device_conf.h"
 # include "bitmap.h"
+# include "storage_file.h"
 
 /* forward declarations of all device types, required by
  * virDomainDeviceDef
@@ -370,6 +371,8 @@ struct _virDomainHostdevSubsys {
     int type; /* enum virDomainHostdevSubsysType */
     union {
         struct {
+            bool autoAddress; /* bus/device were filled automatically based
+                                 on vedor/product */
             unsigned bus;
             unsigned device;
 
@@ -384,7 +387,9 @@ struct _virDomainHostdevSubsys {
 struct _virDomainHostdevDef {
     virDomainDeviceDef parent; /* higher level Def containing this */
     int mode; /* enum virDomainHostdevMode */
+    int startupPolicy; /* enum virDomainStartupPolicy */
     unsigned int managed : 1;
+    unsigned int missing : 1;
     union {
         virDomainHostdevSubsys subsys;
         struct {
@@ -563,10 +568,11 @@ struct _virDomainDiskDef {
         } secret;
     } auth;
     char *driverName;
-    char *driverType;
+    int format; /* enum virStorageFileFormat */
+    virStorageFileMetadataPtr backingChain;
 
     char *mirror;
-    char *mirrorFormat;
+    int mirrorFormat; /* enum virStorageFileFormat */
     bool mirroring;
 
     struct {
@@ -1381,16 +1387,23 @@ enum virDomainFeature {
     VIR_DOMAIN_FEATURE_HAP,
     VIR_DOMAIN_FEATURE_VIRIDIAN,
     VIR_DOMAIN_FEATURE_PRIVNET,
+    VIR_DOMAIN_FEATURE_HYPERV,
 
     VIR_DOMAIN_FEATURE_LAST
 };
 
-enum virDomainApicEoi {
-    VIR_DOMAIN_APIC_EOI_DEFAULT = 0,
-    VIR_DOMAIN_APIC_EOI_ON,
-    VIR_DOMAIN_APIC_EOI_OFF,
+enum virDomainFeatureState {
+    VIR_DOMAIN_FEATURE_STATE_DEFAULT = 0,
+    VIR_DOMAIN_FEATURE_STATE_ON,
+    VIR_DOMAIN_FEATURE_STATE_OFF,
 
-    VIR_DOMAIN_APIC_EOI_LAST
+    VIR_DOMAIN_FEATURE_STATE_LAST
+};
+
+enum virDomainHyperv {
+    VIR_DOMAIN_HYPERV_RELAXED = 0,
+
+    VIR_DOMAIN_HYPERV_LAST
 };
 
 enum virDomainLifecycleAction {
@@ -1412,6 +1425,18 @@ enum virDomainLifecycleCrashAction {
 
     VIR_DOMAIN_LIFECYCLE_CRASH_LAST
 };
+
+typedef enum {
+    VIR_DOMAIN_LOCK_FAILURE_DEFAULT,
+    VIR_DOMAIN_LOCK_FAILURE_POWEROFF,
+    VIR_DOMAIN_LOCK_FAILURE_RESTART,
+    VIR_DOMAIN_LOCK_FAILURE_PAUSE,
+    VIR_DOMAIN_LOCK_FAILURE_IGNORE,
+
+    VIR_DOMAIN_LOCK_FAILURE_LAST
+} virDomainLockFailureAction;
+
+VIR_ENUM_DECL(virDomainLockFailure)
 
 enum virDomainPMState {
     VIR_DOMAIN_PM_STATE_DEFAULT = 0,
@@ -1681,6 +1706,8 @@ struct _virDomainDef {
     int onPoweroff;
     int onCrash;
 
+    int onLockFailure; /* enum virDomainLockFailureAction */
+
     struct {
         /* These options are actually type of enum virDomainPMState */
         int s3;
@@ -1690,8 +1717,10 @@ struct _virDomainDef {
     virDomainOSDef os;
     char *emulator;
     int features;
-    /* enum virDomainApicEoi */
+    /* enum virDomainFeatureState */
     int apic_eoi;
+    /* These options are of type virDomainFeatureState */
+    int hyperv_features[VIR_DOMAIN_HYPERV_LAST];
 
     virDomainClockDef clock;
 
@@ -1873,6 +1902,8 @@ virDomainDeviceDefPtr virDomainDeviceDefCopy(virCapsPtr caps,
                                              virDomainDeviceDefPtr src);
 int virDomainDeviceAddressIsValid(virDomainDeviceInfoPtr info,
                                   int type);
+int virDomainDeviceInfoCopy(virDomainDeviceInfoPtr dst,
+                            virDomainDeviceInfoPtr src);
 void virDomainDeviceInfoClear(virDomainDeviceInfoPtr info);
 void virDomainDefClearPCIAddresses(virDomainDefPtr def);
 void virDomainDefClearDeviceAliases(virDomainDefPtr def);
@@ -1977,13 +2008,12 @@ virDomainDiskDefPtr
 virDomainDiskRemove(virDomainDefPtr def, size_t i);
 virDomainDiskDefPtr
 virDomainDiskRemoveByName(virDomainDefPtr def, const char *name);
+bool virDomainHasDiskMirror(virDomainObjPtr vm);
 
-int virDomainNetIndexByMac(virDomainDefPtr def, const virMacAddrPtr mac);
+int virDomainNetFindIdx(virDomainDefPtr def, virDomainNetDefPtr net);
+virDomainNetDefPtr virDomainNetFind(virDomainDefPtr def, const char *device);
 int virDomainNetInsert(virDomainDefPtr def, virDomainNetDefPtr net);
-virDomainNetDefPtr
-virDomainNetRemove(virDomainDefPtr def, size_t i);
-virDomainNetDefPtr
-virDomainNetRemoveByMac(virDomainDefPtr def, const virMacAddrPtr mac);
+virDomainNetDefPtr virDomainNetRemove(virDomainDefPtr def, size_t i);
 
 int virDomainHostdevInsert(virDomainDefPtr def, virDomainHostdevDefPtr hostdev);
 virDomainHostdevDefPtr
@@ -2119,9 +2149,7 @@ typedef int (*virDomainDiskDefPathIterator)(virDomainDiskDefPtr disk,
                                             void *opaque);
 
 int virDomainDiskDefForeachPath(virDomainDiskDefPtr disk,
-                                bool allowProbing,
                                 bool ignoreOpenFailure,
-                                uid_t uid, gid_t gid,
                                 virDomainDiskDefPathIterator iter,
                                 void *opaque);
 
@@ -2144,8 +2172,8 @@ virDomainChrDefGetSecurityLabelDef(virDomainChrDefPtr def, const char *model);
 virSecurityLabelDefPtr
 virDomainDefAddSecurityLabelDef(virDomainDefPtr def, const char *model);
 
-typedef const char* (*virLifecycleToStringFunc)(int type);
-typedef int (*virLifecycleFromStringFunc)(const char *type);
+typedef const char* (*virEventActionToStringFunc)(int type);
+typedef int (*virEventActionFromStringFunc)(const char *type);
 
 VIR_ENUM_DECL(virDomainTaint)
 
@@ -2153,7 +2181,7 @@ VIR_ENUM_DECL(virDomainVirt)
 VIR_ENUM_DECL(virDomainBoot)
 VIR_ENUM_DECL(virDomainBootMenu)
 VIR_ENUM_DECL(virDomainFeature)
-VIR_ENUM_DECL(virDomainApicEoi)
+VIR_ENUM_DECL(virDomainFeatureState)
 VIR_ENUM_DECL(virDomainLifecycle)
 VIR_ENUM_DECL(virDomainLifecycleCrash)
 VIR_ENUM_DECL(virDomainPMState)
@@ -2219,6 +2247,7 @@ VIR_ENUM_DECL(virDomainGraphicsSpiceClipboardCopypaste)
 VIR_ENUM_DECL(virDomainGraphicsSpiceMouseMode)
 VIR_ENUM_DECL(virDomainNumatuneMemMode)
 VIR_ENUM_DECL(virDomainNumatuneMemPlacementMode)
+VIR_ENUM_DECL(virDomainHyperv)
 /* from libvirt.h */
 VIR_ENUM_DECL(virDomainState)
 VIR_ENUM_DECL(virDomainNostateReason)
@@ -2243,9 +2272,6 @@ VIR_ENUM_DECL(virDomainTimerMode)
 VIR_ENUM_DECL(virDomainCpuPlacementMode)
 
 VIR_ENUM_DECL(virDomainStartupPolicy)
-
-virDomainNetDefPtr virDomainNetFind(virDomainDefPtr def,
-                                    const char *device);
 
 # define VIR_CONNECT_LIST_DOMAINS_FILTERS_ACTIVE   \
                 (VIR_CONNECT_LIST_DOMAINS_ACTIVE | \
@@ -2283,5 +2309,8 @@ virDomainNetDefPtr virDomainNetFind(virDomainDefPtr def,
 
 int virDomainList(virConnectPtr conn, virHashTablePtr domobjs,
                   virDomainPtr **domains, unsigned int flags);
+
+virDomainVcpuPinDefPtr virDomainLookupVcpuPin(virDomainDefPtr def,
+                                              int vcpuid);
 
 #endif /* __DOMAIN_CONF_H */

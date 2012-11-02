@@ -909,6 +909,20 @@ qemuProcessHandleBlockJob(qemuMonitorPtr mon ATTRIBUTE_UNUSED,
     if (disk) {
         path = disk->src;
         event = virDomainEventBlockJobNewFromObj(vm, path, type, status);
+        /* XXX If we completed a block pull or commit, then recompute
+         * the cached backing chain to match.  Better would be storing
+         * the chain ourselves rather than reprobing, but this
+         * requires modifying domain_conf and our XML to fully track
+         * the chain across libvirtd restarts.  For that matter, if
+         * qemu gains support for committing the active layer, we have
+         * to update disk->src.  */
+        if ((type == VIR_DOMAIN_BLOCK_JOB_TYPE_PULL ||
+             type == VIR_DOMAIN_BLOCK_JOB_TYPE_COMMIT) &&
+            status == VIR_DOMAIN_BLOCK_JOB_COMPLETED)
+            qemuDomainDetermineDiskChain(driver, disk, true);
+        if (disk->mirror && type == VIR_DOMAIN_BLOCK_JOB_TYPE_COPY &&
+            status == VIR_DOMAIN_BLOCK_JOB_READY)
+            disk->mirroring = true;
     }
 
     virDomainObjUnlock(vm);
@@ -1178,6 +1192,52 @@ qemuProcessHandleBalloonChange(qemuMonitorPtr mon ATTRIBUTE_UNUSED,
     return 0;
 }
 
+static int
+qemuProcessHandlePMSuspendDisk(qemuMonitorPtr mon ATTRIBUTE_UNUSED,
+                               virDomainObjPtr vm)
+{
+    struct qemud_driver *driver = qemu_driver;
+    virDomainEventPtr event = NULL;
+    virDomainEventPtr lifecycleEvent = NULL;
+
+    virDomainObjLock(vm);
+    event = virDomainEventPMSuspendDiskNewFromObj(vm);
+
+    if (virDomainObjGetState(vm, NULL) == VIR_DOMAIN_RUNNING) {
+        qemuDomainObjPrivatePtr priv = vm->privateData;
+        VIR_DEBUG("Transitioned guest %s to pmsuspended state due to "
+                  "QMP suspend_disk event", vm->def->name);
+
+        virDomainObjSetState(vm, VIR_DOMAIN_PMSUSPENDED,
+                             VIR_DOMAIN_PMSUSPENDED_UNKNOWN);
+        lifecycleEvent =
+            virDomainEventNewFromObj(vm,
+                                     VIR_DOMAIN_EVENT_PMSUSPENDED,
+                                     VIR_DOMAIN_EVENT_PMSUSPENDED_DISK);
+
+        if (virDomainSaveStatus(driver->caps, driver->stateDir, vm) < 0) {
+            VIR_WARN("Unable to save status on vm %s after suspend event",
+                     vm->def->name);
+        }
+
+        if (priv->agent)
+            qemuAgentNotifyEvent(priv->agent, QEMU_AGENT_EVENT_SUSPEND);
+    }
+
+    virDomainObjUnlock(vm);
+
+    if (event || lifecycleEvent) {
+        qemuDriverLock(driver);
+        if (event)
+            qemuDomainEventQueue(driver, event);
+        if (lifecycleEvent)
+            qemuDomainEventQueue(driver, lifecycleEvent);
+        qemuDriverUnlock(driver);
+    }
+
+    return 0;
+}
+
 
 static qemuMonitorCallbacks monitorCallbacks = {
     .destroy = qemuProcessHandleMonitorDestroy,
@@ -1196,6 +1256,7 @@ static qemuMonitorCallbacks monitorCallbacks = {
     .domainPMWakeup = qemuProcessHandlePMWakeup,
     .domainPMSuspend = qemuProcessHandlePMSuspend,
     .domainBalloonChange = qemuProcessHandleBalloonChange,
+    .domainPMSuspendDisk = qemuProcessHandlePMSuspendDisk,
 };
 
 static int
@@ -1832,6 +1893,54 @@ qemuGetNumadAdvice(virDomainDefPtr def ATTRIBUTE_UNUSED)
 }
 #endif
 
+/* Helper to prepare cpumap for affinity setting, convert
+ * NUMA nodeset into cpuset if @nodemask is not NULL, otherwise
+ * just return a new allocated bitmap.
+ */
+virBitmapPtr
+qemuPrepareCpumap(struct qemud_driver *driver,
+                  virBitmapPtr nodemask)
+{
+    int i, hostcpus, maxcpu = QEMUD_CPUMASK_LEN;
+    virNodeInfo nodeinfo;
+    virBitmapPtr cpumap = NULL;
+
+    if (nodeGetInfo(NULL, &nodeinfo) < 0)
+        return NULL;
+
+    /* setaffinity fails if you set bits for CPUs which
+     * aren't present, so we have to limit ourselves */
+    hostcpus = VIR_NODEINFO_MAXCPUS(nodeinfo);
+    if (maxcpu > hostcpus)
+        maxcpu = hostcpus;
+
+    if (!(cpumap = virBitmapNew(maxcpu))) {
+        virReportOOMError();
+        return NULL;
+    }
+
+    if (nodemask) {
+        for (i = 0; i < driver->caps->host.nnumaCell; i++) {
+            int j;
+            int cur_ncpus = driver->caps->host.numaCell[i]->ncpus;
+            bool result;
+            if (virBitmapGetBit(nodemask, i, &result) < 0) {
+                virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                               _("Failed to convert nodeset to cpuset"));
+                virBitmapFree(cpumap);
+                return NULL;
+            }
+            if (result) {
+                for (j = 0; j < cur_ncpus; j++)
+                    ignore_value(virBitmapSetBit(cpumap,
+                                                 driver->caps->host.numaCell[i]->cpus[j]));
+            }
+        }
+    }
+
+    return cpumap;
+}
+
 /*
  * To be run between fork/exec of QEMU only
  */
@@ -1841,49 +1950,21 @@ qemuProcessInitCpuAffinity(struct qemud_driver *driver,
                            virBitmapPtr nodemask)
 {
     int ret = -1;
-    int i, hostcpus, maxcpu = QEMUD_CPUMASK_LEN;
-    virNodeInfo nodeinfo;
-    virBitmapPtr cpumap, cpumapToSet;
+    virBitmapPtr cpumap = NULL;
+    virBitmapPtr cpumapToSet = NULL;
 
-    VIR_DEBUG("Setting CPU affinity");
-
-    if (nodeGetInfo(NULL, &nodeinfo) < 0)
+    if (!(cpumap = qemuPrepareCpumap(driver, nodemask)))
         return -1;
-
-    /* setaffinity fails if you set bits for CPUs which
-     * aren't present, so we have to limit ourselves */
-    hostcpus = VIR_NODEINFO_MAXCPUS(nodeinfo);
-    if (maxcpu > hostcpus)
-        maxcpu = hostcpus;
-
-    cpumap = virBitmapNew(maxcpu);
-    if (!cpumap) {
-        virReportOOMError();
-        return -1;
-    }
-
-    cpumapToSet = cpumap;
 
     if (vm->def->placement_mode == VIR_DOMAIN_CPU_PLACEMENT_MODE_AUTO) {
         VIR_DEBUG("Set CPU affinity with advisory nodeset from numad");
-        /* numad returns the NUMA node list, convert it to cpumap */
-        for (i = 0; i < driver->caps->host.nnumaCell; i++) {
-            int j;
-            int cur_ncpus = driver->caps->host.numaCell[i]->ncpus;
-            bool result;
-            if (virBitmapGetBit(nodemask, i, &result) < 0)
-                goto cleanup;
-            if (result) {
-                for (j = 0; j < cur_ncpus; j++)
-                    ignore_value(virBitmapSetBit(cpumap,
-                                                 driver->caps->host.numaCell[i]->cpus[j]));
-            }
-        }
+        cpumapToSet = cpumap;
     } else {
         VIR_DEBUG("Set CPU affinity with specified cpuset");
         if (vm->def->cpumask) {
             cpumapToSet = vm->def->cpumask;
         } else {
+            cpumapToSet = cpumap;
             /* You may think this is redundant, but we can't assume libvirtd
              * itself is running on all pCPUs, so we need to explicitly set
              * the spawned QEMU instance to all pCPUs if no map is given in
@@ -1941,18 +2022,13 @@ qemuProcessSetLinkStates(virDomainObjPtr vm)
 
 /* Set CPU affinities for vcpus if vcpupin xml provided. */
 static int
-qemuProcessSetVcpuAffinites(virConnectPtr conn,
+qemuProcessSetVcpuAffinites(virConnectPtr conn ATTRIBUTE_UNUSED,
                             virDomainObjPtr vm)
 {
     qemuDomainObjPrivatePtr priv = vm->privateData;
     virDomainDefPtr def = vm->def;
-    virNodeInfo nodeinfo;
     int vcpu, n;
     int ret = -1;
-
-    if (virNodeGetInfo(conn, &nodeinfo) != 0) {
-        return  -1;
-    }
 
     if (!def->cputune.nvcpupin)
         return 0;
@@ -1977,28 +2053,23 @@ cleanup:
     return ret;
 }
 
-/* Set CPU affinities for emulator threads if emulatorpin xml provided. */
+/* Set CPU affinities for emulator threads. */
 static int
-qemuProcessSetEmulatorAffinites(virConnectPtr conn,
+qemuProcessSetEmulatorAffinites(virConnectPtr conn ATTRIBUTE_UNUSED,
                                 virDomainObjPtr vm)
 {
+    virBitmapPtr cpumask;
     virDomainDefPtr def = vm->def;
-    virNodeInfo nodeinfo;
     int ret = -1;
 
-    if (virNodeGetInfo(conn, &nodeinfo) != 0)
-        return -1;
-
-    if (!def->cputune.emulatorpin)
+    if (def->cputune.emulatorpin)
+        cpumask = def->cputune.emulatorpin->cpumask;
+    else if (def->cpumask)
+        cpumask = def->cpumask;
+    else
         return 0;
 
-    if (virProcessInfoSetAffinity(vm->pid,
-                                  def->cputune.emulatorpin->cpumask) < 0) {
-        goto cleanup;
-    }
-
-    ret = 0;
-cleanup:
+    ret = virProcessInfoSetAffinity(vm->pid, cpumask);
     return ret;
 }
 
@@ -2597,8 +2668,9 @@ static int qemuProcessHook(void *data)
     if (virSecurityManagerSetSocketLabel(h->driver->securityManager, h->vm->def) < 0)
         goto cleanup;
     if (virDomainLockProcessStart(h->driver->lockManager,
+                                  h->driver->uri,
                                   h->vm,
-                                  /* QEMU is always pased initially */
+                                  /* QEMU is always paused initially */
                                   true,
                                   &fd) < 0)
         goto cleanup;
@@ -2617,7 +2689,8 @@ static int qemuProcessHook(void *data)
 
     /* This must be done after cgroup placement to avoid resetting CPU
      * affinity */
-    if (qemuProcessInitCpuAffinity(h->driver, h->vm, h->nodemask) < 0)
+    if (!h->vm->def->cputune.emulatorpin &&
+        qemuProcessInitCpuAffinity(h->driver, h->vm, h->nodemask) < 0)
         goto cleanup;
 
     if (qemuProcessInitNumaMemoryPolicy(h->vm, h->nodemask) < 0)
@@ -2666,7 +2739,8 @@ qemuProcessStartCPUs(struct qemud_driver *driver, virDomainObjPtr vm,
     qemuDomainObjPrivatePtr priv = vm->privateData;
 
     VIR_DEBUG("Using lock state '%s'", NULLSTR(priv->lockState));
-    if (virDomainLockProcessResume(driver->lockManager, vm, priv->lockState) < 0) {
+    if (virDomainLockProcessResume(driver->lockManager, driver->uri,
+                                   vm, priv->lockState) < 0) {
         /* Don't free priv->lockState on error, because we need
          * to make sure we have state still present if the user
          * tries to resume again
@@ -3137,7 +3211,7 @@ qemuProcessReconnect(void *opaque)
 
     /* Run an hook to allow admins to do some magic */
     if (virHookPresent(VIR_HOOK_DRIVER_QEMU)) {
-        char *xml = qemuDomainDefFormatXML(driver, obj->def, 0, false);
+        char *xml = qemuDomainDefFormatXML(driver, obj->def, 0);
         int hookret;
 
         hookret = virHookCall(VIR_HOOK_DRIVER_QEMU, obj->def->name,
@@ -3365,7 +3439,7 @@ int qemuProcessStart(virConnectPtr conn,
 
     /* Run an early hook to set-up missing devices */
     if (virHookPresent(VIR_HOOK_DRIVER_QEMU)) {
-        char *xml = qemuDomainDefFormatXML(driver, vm->def, 0, false);
+        char *xml = qemuDomainDefFormatXML(driver, vm->def, 0);
         int hookret;
 
         hookret = virHookCall(VIR_HOOK_DRIVER_QEMU, vm->def->name,
@@ -3382,7 +3456,7 @@ int qemuProcessStart(virConnectPtr conn,
 
     /* Must be run before security labelling */
     VIR_DEBUG("Preparing host devices");
-    if (qemuPrepareHostDevices(driver, vm->def) < 0)
+    if (qemuPrepareHostDevices(driver, vm->def, !migrateFrom) < 0)
         goto cleanup;
 
     VIR_DEBUG("Preparing chr devices");
@@ -3582,7 +3656,7 @@ int qemuProcessStart(virConnectPtr conn,
 
     /* now that we know it is about to start call the hook if present */
     if (virHookPresent(VIR_HOOK_DRIVER_QEMU)) {
-        char *xml = qemuDomainDefFormatXML(driver, vm->def, 0, false);
+        char *xml = qemuDomainDefFormatXML(driver, vm->def, 0);
         int hookret;
 
         hookret = virHookCall(VIR_HOOK_DRIVER_QEMU, vm->def->name,
@@ -3741,7 +3815,7 @@ int qemuProcessStart(virConnectPtr conn,
         goto cleanup;
 
     VIR_DEBUG("Setting cgroup for emulator (if required)");
-    if (qemuSetupCgroupForEmulator(driver, vm) < 0)
+    if (qemuSetupCgroupForEmulator(driver, vm, nodemask) < 0)
         goto cleanup;
 
     VIR_DEBUG("Setting VCPU affinities");
@@ -3823,7 +3897,7 @@ int qemuProcessStart(virConnectPtr conn,
 
     /* finally we can call the 'started' hook script if any */
     if (virHookPresent(VIR_HOOK_DRIVER_QEMU)) {
-        char *xml = qemuDomainDefFormatXML(driver, vm->def, 0, false);
+        char *xml = qemuDomainDefFormatXML(driver, vm->def, 0);
         int hookret;
 
         hookret = virHookCall(VIR_HOOK_DRIVER_QEMU, vm->def->name,
@@ -4003,7 +4077,7 @@ void qemuProcessStop(struct qemud_driver *driver,
 
     /* now that we know it's stopped call the hook if present */
     if (virHookPresent(VIR_HOOK_DRIVER_QEMU)) {
-        char *xml = qemuDomainDefFormatXML(driver, vm->def, 0, false);
+        char *xml = qemuDomainDefFormatXML(driver, vm->def, 0);
 
         /* we can't stop the operation even if the script raised an error */
         virHookCall(VIR_HOOK_DRIVER_QEMU, vm->def->name,
@@ -4098,7 +4172,7 @@ retry:
 
     /* The "release" hook cleans up additional resources */
     if (virHookPresent(VIR_HOOK_DRIVER_QEMU)) {
-        char *xml = qemuDomainDefFormatXML(driver, vm->def, 0, false);
+        char *xml = qemuDomainDefFormatXML(driver, vm->def, 0);
 
         /* we can't stop the operation even if the script raised an error */
         virHookCall(VIR_HOOK_DRIVER_QEMU, vm->def->name,
@@ -4300,7 +4374,7 @@ int qemuProcessAttach(virConnectPtr conn ATTRIBUTE_UNUSED,
 
     /* Run an hook to allow admins to do some magic */
     if (virHookPresent(VIR_HOOK_DRIVER_QEMU)) {
-        char *xml = qemuDomainDefFormatXML(driver, vm->def, 0, false);
+        char *xml = qemuDomainDefFormatXML(driver, vm->def, 0);
         int hookret;
 
         hookret = virHookCall(VIR_HOOK_DRIVER_QEMU, vm->def->name,

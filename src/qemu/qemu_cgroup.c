@@ -25,6 +25,7 @@
 
 #include "qemu_cgroup.h"
 #include "qemu_domain.h"
+#include "qemu_process.h"
 #include "cgroup.h"
 #include "logging.h"
 #include "memory.h"
@@ -87,16 +88,13 @@ qemuSetupDiskPathAllow(virDomainDiskDefPtr disk,
 }
 
 
-int qemuSetupDiskCgroup(struct qemud_driver *driver,
-                        virDomainObjPtr vm,
+int qemuSetupDiskCgroup(virDomainObjPtr vm,
                         virCgroupPtr cgroup,
                         virDomainDiskDefPtr disk)
 {
     qemuCgroupData data = { vm, cgroup };
     return virDomainDiskDefForeachPath(disk,
-                                       driver->allowDiskFormatProbing,
                                        true,
-                                       driver->user, driver->group,
                                        qemuSetupDiskPathAllow,
                                        &data);
 }
@@ -129,16 +127,13 @@ qemuTeardownDiskPathDeny(virDomainDiskDefPtr disk ATTRIBUTE_UNUSED,
 }
 
 
-int qemuTeardownDiskCgroup(struct qemud_driver *driver,
-                           virDomainObjPtr vm,
+int qemuTeardownDiskCgroup(virDomainObjPtr vm,
                            virCgroupPtr cgroup,
                            virDomainDiskDefPtr disk)
 {
     qemuCgroupData data = { vm, cgroup };
     return virDomainDiskDefForeachPath(disk,
-                                       driver->allowDiskFormatProbing,
                                        true,
-                                       driver->user, driver->group,
                                        qemuTeardownDiskPathDeny,
                                        &data);
 }
@@ -232,7 +227,9 @@ int qemuSetupCgroup(struct qemud_driver *driver,
         }
 
         for (i = 0; i < vm->def->ndisks ; i++) {
-            if (qemuSetupDiskCgroup(driver, vm, cgroup, vm->def->disks[i]) < 0)
+            if (qemuDomainDetermineDiskChain(driver, vm->def->disks[i],
+                                             false) < 0 ||
+                qemuSetupDiskCgroup(vm, cgroup, vm->def->disks[i]) < 0)
                 goto cleanup;
         }
 
@@ -288,6 +285,8 @@ int qemuSetupCgroup(struct qemud_driver *driver,
             if (hostdev->mode != VIR_DOMAIN_HOSTDEV_MODE_SUBSYS)
                 continue;
             if (hostdev->source.subsys.type != VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_USB)
+                continue;
+            if (hostdev->missing)
                 continue;
 
             if ((usb = usbGetDevice(hostdev->source.subsys.u.usb.bus,
@@ -499,7 +498,7 @@ int qemuSetupCgroupVcpuPin(virCgroupPtr cgroup,
 
     for (i = 0; i < nvcpupin; i++) {
         if (vcpuid == vcpupin[i]->vcpuid) {
-            return qemuSetupCgroupEmulatorPin(cgroup, vcpupin[i]);
+            return qemuSetupCgroupEmulatorPin(cgroup, vcpupin[i]->cpumask);
         }
     }
 
@@ -507,12 +506,12 @@ int qemuSetupCgroupVcpuPin(virCgroupPtr cgroup,
 }
 
 int qemuSetupCgroupEmulatorPin(virCgroupPtr cgroup,
-                               virDomainVcpuPinDefPtr vcpupin)
+                               virBitmapPtr cpumask)
 {
     int rc = 0;
     char *new_cpus = NULL;
 
-    new_cpus = virBitmapFormat(vcpupin->cpumask);
+    new_cpus = virBitmapFormat(cpumask);
     if (!new_cpus) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                        _("failed to convert cpu mask"));
@@ -639,8 +638,11 @@ cleanup:
 }
 
 int qemuSetupCgroupForEmulator(struct qemud_driver *driver,
-                               virDomainObjPtr vm)
+                               virDomainObjPtr vm,
+                               virBitmapPtr nodemask)
 {
+    virBitmapPtr cpumask = NULL;
+    virBitmapPtr cpumap = NULL;
     virCgroupPtr cgroup = NULL;
     virCgroupPtr cgroup_emulator = NULL;
     virDomainDefPtr def = vm->def;
@@ -688,12 +690,23 @@ int qemuSetupCgroupForEmulator(struct qemud_driver *driver,
         }
     }
 
-    if (def->cputune.emulatorpin &&
-        qemuCgroupControllerActive(driver, VIR_CGROUP_CONTROLLER_CPUSET)) {
-        rc = qemuSetupCgroupEmulatorPin(cgroup_emulator,
-                                        def->cputune.emulatorpin);
-        if (rc < 0)
+    if (def->placement_mode == VIR_DOMAIN_CPU_PLACEMENT_MODE_AUTO) {
+        if (!(cpumap = qemuPrepareCpumap(driver, nodemask)))
             goto cleanup;
+        cpumask = cpumap;
+    } else if (def->cputune.emulatorpin) {
+        cpumask = def->cputune.emulatorpin->cpumask;
+    } else if (def->cpumask) {
+        cpumask = def->cpumask;
+    }
+
+    if (cpumask) {
+        if (qemuCgroupControllerActive(driver, VIR_CGROUP_CONTROLLER_CPUSET)) {
+            rc = qemuSetupCgroupEmulatorPin(cgroup_emulator, cpumask);
+            if (rc < 0)
+                goto cleanup;
+        }
+        cpumask = NULL; /* sanity */
     }
 
     if (period || quota) {
@@ -706,9 +719,12 @@ int qemuSetupCgroupForEmulator(struct qemud_driver *driver,
 
     virCgroupFree(&cgroup_emulator);
     virCgroupFree(&cgroup);
+    virBitmapFree(cpumap);
     return 0;
 
 cleanup:
+    virBitmapFree(cpumap);
+
     if (cgroup_emulator) {
         virCgroupRemove(cgroup_emulator);
         virCgroupFree(&cgroup_emulator);

@@ -187,6 +187,10 @@ VIR_ENUM_IMPL(qemuCaps, QEMU_CAPS_LAST,
               "reboot-timeout", /* 110 */
               "dump-guest-core",
               "seamless-migration",
+              "block-commit",
+              "vnc",
+
+              "drive-mirror", /* 115 */
     );
 
 struct _qemuCaps {
@@ -284,7 +288,7 @@ qemuCapsParseMachineTypesStr(const char *output,
             goto no_memory;
 
         p = t;
-        if (!(t = strstr(p, "(default)")) && (!next || t < next))
+        if ((t = strstr(p, "(default)")) && (!next || t < next))
             defIdx = caps->nmachineTypes;
 
         if ((t = strstr(p, "(alias of ")) && (!next || t < next)) {
@@ -607,7 +611,7 @@ qemuCapsInitGuest(virCapsPtr caps,
     qemuCapsPtr kvmbinCaps = NULL;
     int ret = -1;
 
-    /* Check for existance of base emulator, or alternate base
+    /* Check for existence of base emulator, or alternate base
      * which can be used with magic cpu choice
      */
     binary = qemuCapsFindBinaryForArch(hostarch, guestarch);
@@ -685,6 +689,7 @@ qemuCapsInitGuest(virCapsPtr caps,
     nmachines = 0;
 
     if (caps->host.cpu &&
+        caps->host.cpu->model &&
         qemuCapsGetCPUDefinitions(qemubinCaps, NULL) > 0 &&
         !virCapabilitiesAddGuestFeature(guest, "cpuselection", 1, 0))
         goto error;
@@ -781,12 +786,11 @@ qemuCapsInitCPU(virCapsPtr caps,
     cpu->sockets = nodeinfo.sockets;
     cpu->cores = nodeinfo.cores;
     cpu->threads = nodeinfo.threads;
+    caps->host.cpu = cpu;
 
     if (!(data = cpuNodeData(arch))
         || cpuDecode(cpu, data, NULL, 0, NULL) < 0)
-        goto error;
-
-    caps->host.cpu = cpu;
+        goto cleanup;
 
     ret = 0;
 
@@ -937,6 +941,8 @@ qemuCapsComputeCmdFlags(const char *help,
     }
     if (strstr(help, "-spice"))
         qemuCapsSet(caps, QEMU_CAPS_SPICE);
+    if (strstr(help, "-vnc"))
+        qemuCapsSet(caps, QEMU_CAPS_VNC);
     if (strstr(help, "seamless-migration="))
         qemuCapsSet(caps, QEMU_CAPS_SEAMLESS_MIGRATION);
     if (strstr(help, "boot=on"))
@@ -1839,9 +1845,11 @@ no_memory:
 
 const char *qemuCapsGetCanonicalMachine(qemuCapsPtr caps,
                                         const char *name)
-
 {
     size_t i;
+
+    if (!name)
+        return NULL;
 
     for (i = 0 ; i < caps->nmachineTypes ; i++) {
         if (!caps->machineAliases[i])
@@ -1881,6 +1889,12 @@ qemuCapsProbeQMPCommands(qemuCapsPtr caps,
             qemuCapsSet(caps, QEMU_CAPS_SPICE);
         else if (STREQ(name, "query-kvm"))
             qemuCapsSet(caps, QEMU_CAPS_KVM);
+        else if (STREQ(name, "block-commit"))
+            qemuCapsSet(caps, QEMU_CAPS_BLOCK_COMMIT);
+        else if (STREQ(name, "query-vnc"))
+            qemuCapsSet(caps, QEMU_CAPS_VNC);
+        else if (STREQ(name, "drive-mirror"))
+            qemuCapsSet(caps, QEMU_CAPS_DRIVE_MIRROR);
         VIR_FREE(name);
     }
     VIR_FREE(commands);
@@ -1905,6 +1919,8 @@ qemuCapsProbeQMPEvents(qemuCapsPtr caps,
 
         if (STREQ(name, "BALLOON_CHANGE"))
             qemuCapsSet(caps, QEMU_CAPS_BALLOON_EVENT);
+        if (STREQ(name, "SPICE_MIGRATE_COMPLETED"))
+            qemuCapsSet(caps, QEMU_CAPS_SEAMLESS_MIGRATION);
         VIR_FREE(name);
     }
     VIR_FREE(events);
@@ -2016,6 +2032,33 @@ qemuCapsProbeQMPCPUDefinitions(qemuCapsPtr caps,
 }
 
 
+static int
+qemuCapsProbeQMPKVMState(qemuCapsPtr caps,
+                         qemuMonitorPtr mon)
+{
+    bool enabled = false;
+    bool present = false;
+
+    if (!qemuCapsGet(caps, QEMU_CAPS_KVM))
+        return 0;
+
+    if (qemuMonitorGetKVMState(mon, &enabled, &present) < 0)
+        return -1;
+
+    /* The QEMU_CAPS_KVM flag was initially set according to the QEMU
+     * reporting the recognition of 'query-kvm' QMP command, but the
+     * flag means whether the KVM is enabled by default and should be
+     * disabled in case we want SW emulated machine, so let's fix that
+     * if it's true. */
+    if (!enabled) {
+        qemuCapsClear(caps, QEMU_CAPS_KVM);
+        qemuCapsSet(caps, QEMU_CAPS_ENABLE_KVM);
+    }
+
+    return 0;
+}
+
+
 int qemuCapsProbeQMP(qemuCapsPtr caps,
                      qemuMonitorPtr mon)
 {
@@ -2055,6 +2098,8 @@ qemuCapsInitHelp(qemuCapsPtr caps)
         /* For historical compat we use 'itanium' as arch name */
         if (STREQ(tmp, "ia64"))
             tmp = "itanium";
+        else if (STREQ(tmp, "i386"))
+            tmp = "i686";
     } else {
         uname_normalize(&ut);
         tmp = ut.machine;
@@ -2144,7 +2189,6 @@ qemuCapsInitQMPBasic(qemuCapsPtr caps)
     qemuCapsSet(caps, QEMU_CAPS_DRIVE_SERIAL);
     qemuCapsSet(caps, QEMU_CAPS_MIGRATE_QEMU_UNIX);
     qemuCapsSet(caps, QEMU_CAPS_CHARDEV);
-    qemuCapsSet(caps, QEMU_CAPS_ENABLE_KVM);
     qemuCapsSet(caps, QEMU_CAPS_MONITOR_JSON);
     qemuCapsSet(caps, QEMU_CAPS_BALLOON);
     qemuCapsSet(caps, QEMU_CAPS_DEVICE);
@@ -2157,7 +2201,6 @@ qemuCapsInitQMPBasic(qemuCapsPtr caps)
     qemuCapsSet(caps, QEMU_CAPS_NODEFCONFIG);
     qemuCapsSet(caps, QEMU_CAPS_BOOT_MENU);
     qemuCapsSet(caps, QEMU_CAPS_FSDEV);
-    qemuCapsSet(caps, QEMU_CAPS_NESTING);
     qemuCapsSet(caps, QEMU_CAPS_NAME_PROCESS);
     qemuCapsSet(caps, QEMU_CAPS_DRIVE_READONLY);
     qemuCapsSet(caps, QEMU_CAPS_SMBIOS_TYPE);
@@ -2273,7 +2316,7 @@ qemuCapsInitQMP(qemuCapsPtr caps,
     VIR_DEBUG("Got version %d.%d.%d (%s)",
               major, minor, micro, NULLSTR(package));
 
-    if (!(major >= 1 || (major == 1 && minor >= 1))) {
+    if (major < 1 || (major == 1 && minor < 2)) {
         VIR_DEBUG("Not new enough for QMP capabilities detection");
         ret = 0;
         goto cleanup;
@@ -2285,6 +2328,14 @@ qemuCapsInitQMP(qemuCapsPtr caps,
 
     if (!(caps->arch = qemuMonitorGetTargetArch(mon)))
         goto cleanup;
+
+    /* Map i386, i486, i586 to i686.  */
+    if (caps->arch[0] == 'i' &&
+        caps->arch[1] != '\0' &&
+        caps->arch[2] == '8' &&
+        caps->arch[3] == '6' &&
+        caps->arch[4] == '\0')
+        caps->arch[1] = '6';
 
     /* Currently only x86_64 and i686 support PCI-multibus. */
     if (STREQLEN(caps->arch, "x86_64", 6) ||
@@ -2306,6 +2357,8 @@ qemuCapsInitQMP(qemuCapsPtr caps,
     if (qemuCapsProbeQMPMachineTypes(caps, mon) < 0)
         goto cleanup;
     if (qemuCapsProbeQMPCPUDefinitions(caps, mon) < 0)
+        goto cleanup;
+    if (qemuCapsProbeQMPKVMState(caps, mon) < 0)
         goto cleanup;
 
     ret = 0;

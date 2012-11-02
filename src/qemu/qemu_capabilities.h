@@ -45,7 +45,7 @@ enum qemuCapsFlags {
     QEMU_CAPS_MIGRATE_QEMU_TCP   = 10, /* have qemu tcp migration */
     QEMU_CAPS_MIGRATE_QEMU_EXEC  = 11, /* have qemu exec migration */
     QEMU_CAPS_DRIVE_CACHE_V2     = 12, /* cache= flag wanting new v2 values */
-    QEMU_CAPS_KVM                = 13, /* Whether KVM is compiled in */
+    QEMU_CAPS_KVM                = 13, /* Whether KVM is enabled by default */
     QEMU_CAPS_DRIVE_FORMAT       = 14, /* Is -drive format= avail */
     QEMU_CAPS_VGA                = 15, /* Is -vga avail */
 
@@ -150,6 +150,9 @@ enum qemuCapsFlags {
     QEMU_CAPS_REBOOT_TIMEOUT     = 110, /* -boot reboot-timeout */
     QEMU_CAPS_DUMP_GUEST_CORE    = 111, /* dump-guest-core-parameter */
     QEMU_CAPS_SEAMLESS_MIGRATION = 112, /* seamless-migration for SPICE */
+    QEMU_CAPS_BLOCK_COMMIT       = 113, /* block-commit */
+    QEMU_CAPS_VNC                = 114, /* Is -vnc available? */
+    QEMU_CAPS_DRIVE_MIRROR       = 115, /* drive-mirror monitor command */
 
     QEMU_CAPS_LAST,                   /* this must always be the last item */
 };

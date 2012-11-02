@@ -17,6 +17,7 @@
 *.rej
 *.s
 *~
+.#*
 .deps
 .gdb_history
 .git
@@ -26,6 +27,7 @@
 .memdump
 .sc-start-sc_*
 /ABOUT-NLS
+/AUTHORS
 /COPYING
 /ChangeLog
 /GNUmakefile
@@ -54,6 +56,7 @@
 /daemon/libvirtd.8.in
 /daemon/libvirtd.init
 /daemon/libvirtd.pod
+/daemon/libvirtd.policy
 /daemon/libvirtd.service
 /daemon/test_libvirtd.aug
 /docs/apibuild.py.stamp
@@ -164,6 +167,7 @@
 /tests/virdrivermoduletest
 /tests/virhashtest
 /tests/virkeyfiletest
+/tests/virlockspacetest
 /tests/virnet*test
 /tests/virshtest
 /tests/virtimetest
@@ -189,6 +193,7 @@ results.log
 stamp-h
 stamp-h.in
 stamp-h1
+tags
 !/gnulib/lib/Makefile.am
 !/gnulib/tests/Makefile.am
 !/m4/virt-*.m4

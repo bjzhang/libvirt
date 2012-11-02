@@ -780,21 +780,33 @@ error:
     goto cleanup;
 }
 
+const char *virXMLPickShellSafeComment(const char *str1, const char *str2)
+{
+    if(str1 && !strpbrk(str1, "\r\t\n !\"#$&'()*;<>?[\\]^`{|}~") &&
+       !strstr(str1, "--"))
+        return str1;
+    if(str2 && !strpbrk(str2, "\r\t\n !\"#$&'()*;<>?[\\]^`{|}~") &&
+       !strstr(str2, "--"))
+        return str2;
+    return NULL;
+}
 
 static int virXMLEmitWarning(int fd,
                              const char *name,
                              const char *cmd)
 {
     size_t len;
-    const char *prologue = "<!--\n\
-WARNING: THIS IS AN AUTO-GENERATED FILE. CHANGES TO IT ARE LIKELY TO BE \n\
-OVERWRITTEN AND LOST. Changes to this xml configuration should be made using:\n\
-  virsh ";
-    const char *epilogue = "\n\
-or other application using the libvirt API.\n\
--->\n\n";
+    const char *prologue =
+        "<!--\n"
+        "WARNING: THIS IS AN AUTO-GENERATED FILE. CHANGES TO IT ARE LIKELY TO BE\n"
+        "OVERWRITTEN AND LOST. Changes to this xml configuration should be made using:\n"
+        "  virsh ";
+    const char *epilogue =
+        "\n"
+        "or other application using the libvirt API.\n"
+        "-->\n\n";
 
-    if (fd < 0 || !name || !cmd) {
+    if (fd < 0 || !cmd) {
         errno = EINVAL;
         return -1;
     }
@@ -807,12 +819,14 @@ or other application using the libvirt API.\n\
     if (safewrite(fd, cmd, len) != len)
         return -1;
 
-    if (safewrite(fd, " ", 1) != 1)
-        return -1;
+    if (name) {
+        if (safewrite(fd, " ", 1) != 1)
+            return -1;
 
-    len = strlen(name);
-    if (safewrite(fd, name, len) != len)
-        return -1;
+        len = strlen(name);
+        if (safewrite(fd, name, len) != len)
+            return -1;
+    }
 
     len = strlen(epilogue);
     if (safewrite(fd, epilogue, len) != len)
@@ -833,7 +847,7 @@ virXMLRewriteFile(int fd, void *opaque)
 {
     struct virXMLRewriteFileData *data = opaque;
 
-    if (data->warnName && data->warnCommand) {
+    if (data->warnCommand) {
         if (virXMLEmitWarning(fd, data->warnName, data->warnCommand) < 0)
             return -1;
     }

@@ -3846,7 +3846,8 @@ vboxAttachDrives(virDomainDefPtr def, vboxGlobalData *data, IMachine *machine)
         VIR_DEBUG("disk(%d) src:        %s", i, def->disks[i]->src);
         VIR_DEBUG("disk(%d) dst:        %s", i, def->disks[i]->dst);
         VIR_DEBUG("disk(%d) driverName: %s", i, def->disks[i]->driverName);
-        VIR_DEBUG("disk(%d) driverType: %s", i, def->disks[i]->driverType);
+        VIR_DEBUG("disk(%d) driverType: %s", i,
+                  virStorageFileFormatTypeToString(def->disks[i]->format));
         VIR_DEBUG("disk(%d) cachemode:  %d", i, def->disks[i]->cachemode);
         VIR_DEBUG("disk(%d) readonly:   %s", i, (def->disks[i]->readonly
                                              ? "True" : "False"));
@@ -4125,7 +4126,8 @@ vboxAttachDrives(virDomainDefPtr def, vboxGlobalData *data, IMachine *machine)
         VIR_DEBUG("disk(%d) src:        %s", i, def->disks[i]->src);
         VIR_DEBUG("disk(%d) dst:        %s", i, def->disks[i]->dst);
         VIR_DEBUG("disk(%d) driverName: %s", i, def->disks[i]->driverName);
-        VIR_DEBUG("disk(%d) driverType: %s", i, def->disks[i]->driverType);
+        VIR_DEBUG("disk(%d) driverType: %s", i,
+                  virStorageFileFormatTypeToString(def->disks[i]->format));
         VIR_DEBUG("disk(%d) cachemode:  %d", i, def->disks[i]->cachemode);
         VIR_DEBUG("disk(%d) readonly:   %s", i, (def->disks[i]->readonly
                                              ? "True" : "False"));
@@ -7049,7 +7051,7 @@ vboxCallbackOnMachineRegistered(IVirtualBoxCallback *pThis ATTRIBUTE_UNUSED,
             virDomainEventPtr ev;
 
             /* CURRENT LIMITATION: we never get the VIR_DOMAIN_EVENT_UNDEFINED
-             * event becuase the when the machine is de-registered the call
+             * event because the when the machine is de-registered the call
              * to vboxDomainLookupByUUID fails and thus we don't get any
              * dom pointer which is necessary (null dom pointer doesn't work)
              * to show the VIR_DOMAIN_EVENT_UNDEFINED event
@@ -8747,7 +8749,7 @@ static int vboxStorageVolDelete(virStorageVolPtr vol,
              * is no 128bit width simple item type for a SafeArray to fit a
              * GUID in. The largest simple type it 64bit width and VirtualBox
              * uses two of this 64bit items to represents one GUID. Therefore,
-             * we devide the size of the SafeArray by two, to compensate for
+             * we divide the size of the SafeArray by two, to compensate for
              * this workaround in VirtualBox */
             machineIds.count /= 2;
 #endif /* VBOX_API_VERSION >= 2002 */
@@ -9155,8 +9157,8 @@ vboxDomainScreenshot(virDomainPtr dom,
         return NULL;
     }
 
-    if ((tmp_fd = mkstemp(tmp)) == -1) {
-        virReportSystemError(errno, _("mkstemp(\"%s\") failed"), tmp);
+    if ((tmp_fd = mkostemp(tmp, O_CLOEXEC)) == -1) {
+        virReportSystemError(errno, _("mkostemp(\"%s\") failed"), tmp);
         VIR_FREE(tmp);
         VBOX_RELEASE(machine);
         return NULL;

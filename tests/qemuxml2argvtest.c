@@ -375,6 +375,9 @@ mymain(void)
     DO_TEST("boot-menu-disable-drive-bootindex",
             QEMU_CAPS_BOOT_MENU, QEMU_CAPS_DEVICE, QEMU_CAPS_DRIVE,
             QEMU_CAPS_BOOTINDEX);
+    DO_TEST_PARSE_ERROR("boot-dev+order",
+            QEMU_CAPS_BOOTINDEX, QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE,
+            QEMU_CAPS_VIRTIO_BLK_SCSI, QEMU_CAPS_VIRTIO_BLK_SG_IO);
     DO_TEST("boot-order",
             QEMU_CAPS_BOOTINDEX, QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE,
             QEMU_CAPS_VIRTIO_BLK_SCSI, QEMU_CAPS_VIRTIO_BLK_SG_IO);
@@ -408,6 +411,8 @@ mymain(void)
     DO_TEST("eoi-disabled", NONE);
     DO_TEST("eoi-enabled", NONE);
     DO_TEST("kvmclock+eoi-disabled", QEMU_CAPS_ENABLE_KVM);
+
+    DO_TEST("hyperv", NONE);
 
     DO_TEST("hugepages", QEMU_CAPS_MEM_PATH);
     DO_TEST("disk-cdrom", NONE);
@@ -531,16 +536,16 @@ mymain(void)
             QEMU_CAPS_SCSI_BLOCK, QEMU_CAPS_VIRTIO_BLK_SG_IO,
             QEMU_CAPS_SCSI_LSI, QEMU_CAPS_VIRTIO_SCSI_PCI);
 
-    DO_TEST("graphics-vnc", NONE);
-    DO_TEST("graphics-vnc-socket", NONE);
+    DO_TEST("graphics-vnc", QEMU_CAPS_VNC);
+    DO_TEST("graphics-vnc-socket", QEMU_CAPS_VNC);
 
     driver.vncSASL = 1;
     driver.vncSASLdir = strdup("/root/.sasl2");
-    DO_TEST("graphics-vnc-sasl", QEMU_CAPS_VGA);
+    DO_TEST("graphics-vnc-sasl", QEMU_CAPS_VNC, QEMU_CAPS_VGA);
     driver.vncTLS = 1;
     driver.vncTLSx509verify = 1;
     driver.vncTLSx509certdir = strdup("/etc/pki/tls/qemu");
-    DO_TEST("graphics-vnc-tls", NONE);
+    DO_TEST("graphics-vnc-tls", QEMU_CAPS_VNC);
     driver.vncSASL = driver.vncTLSx509verify = driver.vncTLS = 0;
     VIR_FREE(driver.vncSASLdir);
     VIR_FREE(driver.vncTLSx509certdir);
@@ -580,7 +585,7 @@ mymain(void)
 
     DO_TEST("input-usbmouse", NONE);
     DO_TEST("input-usbtablet", NONE);
-    DO_TEST("input-xen", QEMU_CAPS_DOMID, QEMU_CAPS_KVM);
+    DO_TEST("input-xen", QEMU_CAPS_DOMID, QEMU_CAPS_KVM, QEMU_CAPS_VNC);
     DO_TEST("misc-acpi", NONE);
     DO_TEST("misc-disable-s3", QEMU_CAPS_DISABLE_S3);
     DO_TEST("misc-disable-suspends", QEMU_CAPS_DISABLE_S3, QEMU_CAPS_DISABLE_S4);
