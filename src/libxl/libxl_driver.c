@@ -2936,41 +2936,45 @@ libxlDomainAttachDeviceDiskLive(libxlDomainObjPrivatePtr priv,
             ret = libxlDomainChangeEjectableMedia(priv, vm, l_disk);
             break;
         case VIR_DOMAIN_DISK_DEVICE_DISK:
-            if (l_disk->bus == VIR_DOMAIN_DISK_BUS_XEN) {
-                if (virDomainDiskIndexByName(vm->def, l_disk->dst, true) >= 0) {
-                    virReportError(VIR_ERR_OPERATION_FAILED,
-                                   _("target %s already exists"), l_disk->dst);
-                    goto cleanup;
-                }
+            switch (l_disk->bus) {
+                case VIR_DOMAIN_DISK_BUS_XEN:
+                case VIR_DOMAIN_DISK_BUS_SCSI:
+                    if (virDomainDiskIndexByName(vm->def, l_disk->dst, true) >= 0) {
+                        virReportError(VIR_ERR_OPERATION_FAILED,
+                                       _("target %s already exists"), l_disk->dst);
+                        goto cleanup;
+                    }
 
-                if (!l_disk->src) {
-                    virReportError(VIR_ERR_INTERNAL_ERROR,
-                                   "%s", _("disk source path is missing"));
-                    goto cleanup;
-                }
+                    if (!l_disk->src) {
+                        virReportError(VIR_ERR_INTERNAL_ERROR,
+                                       "%s", _("disk source path is missing"));
+                        goto cleanup;
+                    }
 
-                if (VIR_REALLOC_N(vm->def->disks, vm->def->ndisks+1) < 0) {
-                    virReportOOMError();
-                    goto cleanup;
-                }
+                    if (VIR_REALLOC_N(vm->def->disks, vm->def->ndisks+1) < 0) {
+                        virReportOOMError();
+                        goto cleanup;
+                    }
 
-                if (libxlMakeDisk(vm->def, l_disk, &x_disk) < 0)
-                    goto cleanup;
+                    if (libxlMakeDisk(vm->def, l_disk, &x_disk) < 0)
+                        goto cleanup;
 
-                if ((ret = libxl_device_disk_add(&priv->ctx, vm->def->id,
-                                                &x_disk)) < 0) {
-                    virReportError(VIR_ERR_INTERNAL_ERROR,
-                                   _("libxenlight failed to attach disk '%s'"),
-                                   l_disk->dst);
-                    goto cleanup;
-                }
+                    if ((ret = libxl_device_disk_add(&priv->ctx, vm->def->id,
+                                                    &x_disk)) < 0) {
+                        virReportError(VIR_ERR_INTERNAL_ERROR,
+                                       _("libxenlight failed to attach disk '%s'"),
+                                       l_disk->dst);
+                        goto cleanup;
+                    }
 
-                virDomainDiskInsertPreAlloced(vm->def, l_disk);
+                    virDomainDiskInsertPreAlloced(vm->def, l_disk);
+                    break;
 
-            } else {
-                virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
-                               _("disk bus '%s' cannot be hotplugged."),
-                               virDomainDiskBusTypeToString(l_disk->bus));
+                default:
+                    virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                                   _("disk bus '%s' cannot be hotplugged."),
+                                   virDomainDiskBusTypeToString(l_disk->bus));
+                    break;
             }
             break;
         default:
@@ -2996,36 +3000,38 @@ libxlDomainDetachDeviceDiskLive(libxlDomainObjPrivatePtr priv,
 
     switch (dev->data.disk->device)  {
         case VIR_DOMAIN_DISK_DEVICE_DISK:
-            if (dev->data.disk->bus == VIR_DOMAIN_DISK_BUS_XEN) {
+            switch (l_disk->bus) {
+                case VIR_DOMAIN_DISK_BUS_XEN:
+                case VIR_DOMAIN_DISK_BUS_SCSI:
+                    if ((i = virDomainDiskIndexByName(vm->def,
+                                                      dev->data.disk->dst,
+                                                      false)) < 0) {
+                        virReportError(VIR_ERR_OPERATION_FAILED,
+                                       _("disk %s not found"), dev->data.disk->dst);
+                        goto cleanup;
+                    }
 
-                if ((i = virDomainDiskIndexByName(vm->def,
-                                                  dev->data.disk->dst,
-                                                  false)) < 0) {
-                    virReportError(VIR_ERR_OPERATION_FAILED,
-                                   _("disk %s not found"), dev->data.disk->dst);
-                    goto cleanup;
-                }
+                    l_disk = vm->def->disks[i];
 
-                l_disk = vm->def->disks[i];
+                    if (libxlMakeDisk(vm->def, l_disk, &x_disk) < 0)
+                        goto cleanup;
 
-                if (libxlMakeDisk(vm->def, l_disk, &x_disk) < 0)
-                    goto cleanup;
+                    if ((ret = libxl_device_disk_del(&priv->ctx, &x_disk,
+                                                     wait_secs)) < 0) {
+                        virReportError(VIR_ERR_INTERNAL_ERROR,
+                                       _("libxenlight failed to detach disk '%s'"),
+                                       l_disk->dst);
+                        goto cleanup;
+                    }
 
-                if ((ret = libxl_device_disk_del(&priv->ctx, &x_disk,
-                                                 wait_secs)) < 0) {
-                    virReportError(VIR_ERR_INTERNAL_ERROR,
-                                   _("libxenlight failed to detach disk '%s'"),
-                                   l_disk->dst);
-                    goto cleanup;
-                }
-
-                virDomainDiskRemove(vm->def, i);
-                virDomainDiskDefFree(l_disk);
-
-            } else {
-                virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
-                               _("disk bus '%s' cannot be hot unplugged."),
-                               virDomainDiskBusTypeToString(dev->data.disk->bus));
+                    virDomainDiskRemove(vm->def, i);
+                    virDomainDiskDefFree(l_disk);
+                    break;
+                default:
+                    virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                                   _("disk bus '%s' cannot be hot unplugged."),
+                                   virDomainDiskBusTypeToString(dev->data.disk->bus));
+                    break;
             }
             break;
         default:
@@ -3270,8 +3276,11 @@ libxlDomainModifyDeviceFlags(virDomainPtr dom, const char *xml,
 
     if (flags & VIR_DOMAIN_DEVICE_MODIFY_CONFIG) {
         if (!(dev = virDomainDeviceDefParse(driver->caps, vm->def, xml,
-                                            VIR_DOMAIN_XML_INACTIVE)))
+                                            VIR_DOMAIN_XML_INACTIVE))) {
+            virReportError(VIR_ERR_OPERATION_INVALID, "%s",
+                           _("virDomainDeviceDefParse fail"));
             goto cleanup;
+        }
 
         /* Make a copy for updated domain. */
         if (!(vmdef = virDomainObjCopyPersistentDef(driver->caps, vm)))
