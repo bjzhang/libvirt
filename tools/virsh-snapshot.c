@@ -127,6 +127,7 @@ static const vshCmdOptDef opts_snapshot_create[] = {
     {"reuse-external", VSH_OT_BOOL, 0, N_("reuse any existing external files")},
     {"quiesce", VSH_OT_BOOL, 0, N_("quiesce guest's file systems")},
     {"atomic", VSH_OT_BOOL, 0, N_("require atomic operation")},
+    {"live", VSH_OT_BOOL, 0, N_("take a live snapshot")},
     {NULL, 0, 0, NULL}
 };
 
@@ -155,6 +156,8 @@ cmdSnapshotCreate(vshControl *ctl, const vshCmd *cmd)
         flags |= VIR_DOMAIN_SNAPSHOT_CREATE_QUIESCE;
     if (vshCommandOptBool(cmd, "atomic"))
         flags |= VIR_DOMAIN_SNAPSHOT_CREATE_ATOMIC;
+    if (vshCommandOptBool(cmd, "live"))
+        flags |= VIR_DOMAIN_SNAPSHOT_CREATE_LIVE;
 
     dom = vshCommandOptDomain(ctl, cmd, NULL);
     if (dom == NULL)
@@ -191,36 +194,72 @@ cleanup:
  * "snapshot-create-as" command
  */
 static int
+vshParseSnapshotMemspec(vshControl *ctl, virBufferPtr buf, const char *str)
+{
+    int ret = -1;
+    const char *snapshot = NULL;
+    const char *file = NULL;
+    char **array = NULL;
+    int narray;
+    int i;
+
+    if (!str)
+        return 0;
+
+    narray = vshStringToArray(str, &array);
+    if (narray < 0)
+        goto cleanup;
+
+    for (i = 0; i < narray; i++) {
+        if (!snapshot && STRPREFIX(array[i], "snapshot="))
+            snapshot = array[i] + strlen("snapshot=");
+        else if (!file && STRPREFIX(array[i], "file="))
+            file = array[i] + strlen("file=");
+        else if (!file && *array[i] == '/')
+            file = array[i];
+        else
+            goto cleanup;
+    }
+
+    virBufferAddLit(buf, "  <memory");
+    virBufferEscapeString(buf, " snapshot='%s'", snapshot);
+    virBufferEscapeString(buf, " file='%s'", file);
+    virBufferAddLit(buf, "/>\n");
+    ret = 0;
+cleanup:
+    if (ret < 0)
+        vshError(ctl, _("unable to parse memspec: %s"), str);
+    if (array) {
+        VIR_FREE(*array);
+        VIR_FREE(array);
+    }
+    return ret;
+}
+
+static int
 vshParseSnapshotDiskspec(vshControl *ctl, virBufferPtr buf, const char *str)
 {
     int ret = -1;
-    char *name = NULL;
-    char *snapshot = NULL;
-    char *driver = NULL;
-    char *file = NULL;
-    char *spec = vshStrdup(ctl, str);
-    char *tmp = spec;
-    size_t len = strlen(str);
+    const char *name = NULL;
+    const char *snapshot = NULL;
+    const char *driver = NULL;
+    const char *file = NULL;
+    char **array = NULL;
+    int narray;
+    int i;
 
-    if (*str == ',')
+    narray = vshStringToArray(str, &array);
+    if (narray <= 0)
         goto cleanup;
-    name = tmp;
-    while ((tmp = strchr(tmp, ','))) {
-        if (tmp[1] == ',') {
-            /* Recognize ,, as an escape for a literal comma */
-            memmove(&tmp[1], &tmp[2], len - (tmp - spec) - 2 + 1);
-            len--;
-            tmp++;
-            continue;
-        }
-        /* Terminate previous string, look for next recognized one */
-        *tmp++ = '\0';
-        if (!snapshot && STRPREFIX(tmp, "snapshot="))
-            snapshot = tmp + strlen("snapshot=");
-        else if (!driver && STRPREFIX(tmp, "driver="))
-            driver = tmp + strlen("driver=");
-        else if (!file && STRPREFIX(tmp, "file="))
-            file = tmp + strlen("file=");
+
+    name = array[0];
+    for (i = 1; i < narray; i++) {
+        if (!snapshot && STRPREFIX(array[i], "snapshot="))
+            snapshot = array[i] + strlen("snapshot=");
+        else if (!driver && STRPREFIX(array[i], "driver="))
+            driver = array[i] + strlen("driver=");
+        else if (!file && STRPREFIX(array[i], "file="))
+            file = array[i] + strlen("file=");
         else
             goto cleanup;
     }
@@ -242,7 +281,10 @@ vshParseSnapshotDiskspec(vshControl *ctl, virBufferPtr buf, const char *str)
 cleanup:
     if (ret < 0)
         vshError(ctl, _("unable to parse diskspec: %s"), str);
-    VIR_FREE(spec);
+    if (array) {
+        VIR_FREE(*array);
+        VIR_FREE(array);
+    }
     return ret;
 }
 
@@ -263,6 +305,9 @@ static const vshCmdOptDef opts_snapshot_create_as[] = {
     {"reuse-external", VSH_OT_BOOL, 0, N_("reuse any existing external files")},
     {"quiesce", VSH_OT_BOOL, 0, N_("quiesce guest's file systems")},
     {"atomic", VSH_OT_BOOL, 0, N_("require atomic operation")},
+    {"live", VSH_OT_BOOL, 0, N_("take a live snapshot")},
+    {"memspec", VSH_OT_DATA, VSH_OFLAG_REQ_OPT,
+     N_("memory attributes: [file=]name[,snapshot=type]")},
     {"diskspec", VSH_OT_ARGV, 0,
      N_("disk attributes: disk[,snapshot=type][,driver=type][,file=name]")},
     {NULL, 0, 0, NULL}
@@ -276,6 +321,7 @@ cmdSnapshotCreateAs(vshControl *ctl, const vshCmd *cmd)
     char *buffer = NULL;
     const char *name = NULL;
     const char *desc = NULL;
+    const char *memspec = NULL;
     virBuffer buf = VIR_BUFFER_INITIALIZER;
     unsigned int flags = 0;
     const vshCmdOpt *opt = NULL;
@@ -292,6 +338,8 @@ cmdSnapshotCreateAs(vshControl *ctl, const vshCmd *cmd)
         flags |= VIR_DOMAIN_SNAPSHOT_CREATE_QUIESCE;
     if (vshCommandOptBool(cmd, "atomic"))
         flags |= VIR_DOMAIN_SNAPSHOT_CREATE_ATOMIC;
+    if (vshCommandOptBool(cmd, "live"))
+        flags |= VIR_DOMAIN_SNAPSHOT_CREATE_LIVE;
 
     dom = vshCommandOptDomain(ctl, cmd, NULL);
     if (dom == NULL)
@@ -308,6 +356,12 @@ cmdSnapshotCreateAs(vshControl *ctl, const vshCmd *cmd)
         virBufferEscapeString(&buf, "  <name>%s</name>\n", name);
     if (desc)
         virBufferEscapeString(&buf, "  <description>%s</description>\n", desc);
+
+    if (vshCommandOptString(cmd, "memspec", &memspec) < 0 ||
+        vshParseSnapshotMemspec(ctl, &buf, memspec) < 0) {
+        virBufferFreeAndReset(&buf);
+        goto cleanup;
+    }
     if (vshCommandOptBool(cmd, "diskspec")) {
         virBufferAddLit(&buf, "  <disks>\n");
         while ((opt = vshCommandOptArgv(cmd, opt))) {
@@ -405,7 +459,7 @@ cmdSnapshotEdit(vshControl *ctl, const vshCmd *cmd)
     virDomainPtr dom = NULL;
     virDomainSnapshotPtr snapshot = NULL;
     virDomainSnapshotPtr edited = NULL;
-    const char *name;
+    const char *name = NULL;
     const char *edited_name;
     bool ret = false;
     unsigned int getxml_flags = VIR_DOMAIN_XML_SECURE;
@@ -478,7 +532,7 @@ cmdSnapshotEdit(vshControl *ctl, const vshCmd *cmd)
     ret = true;
 
 cleanup:
-    if (!ret)
+    if (!ret && name)
         vshError(ctl, _("Failed to update %s"), name);
     if (edited)
         virDomainSnapshotFree(edited);

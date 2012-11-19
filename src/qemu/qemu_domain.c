@@ -65,6 +65,7 @@ VIR_ENUM_IMPL(qemuDomainAsyncJob, QEMU_ASYNC_JOB_LAST,
               "migration in",
               "save",
               "dump",
+              "snapshot",
 );
 
 
@@ -79,6 +80,7 @@ qemuDomainAsyncJobPhaseToString(enum qemuDomainAsyncJob job,
 
     case QEMU_ASYNC_JOB_SAVE:
     case QEMU_ASYNC_JOB_DUMP:
+    case QEMU_ASYNC_JOB_SNAPSHOT:
     case QEMU_ASYNC_JOB_NONE:
     case QEMU_ASYNC_JOB_LAST:
         ; /* fall through */
@@ -101,6 +103,7 @@ qemuDomainAsyncJobPhaseFromString(enum qemuDomainAsyncJob job,
 
     case QEMU_ASYNC_JOB_SAVE:
     case QEMU_ASYNC_JOB_DUMP:
+    case QEMU_ASYNC_JOB_SNAPSHOT:
     case QEMU_ASYNC_JOB_NONE:
     case QEMU_ASYNC_JOB_LAST:
         ; /* fall through */
@@ -157,6 +160,7 @@ qemuDomainObjResetAsyncJob(qemuDomainObjPrivatePtr priv)
     job->mask = DEFAULT_JOB_MASK;
     job->start = 0;
     job->dump_memory_only = false;
+    job->asyncAbort = false;
     memset(&job->info, 0, sizeof(job->info));
 }
 
@@ -954,6 +958,17 @@ qemuDomainObjEndAsyncJob(struct qemud_driver *driver, virDomainObjPtr obj)
     virCondBroadcast(&priv->job.asyncCond);
 
     return virObjectUnref(obj);
+}
+
+void
+qemuDomainObjAbortAsyncJob(virDomainObjPtr obj)
+{
+    qemuDomainObjPrivatePtr priv = obj->privateData;
+
+    VIR_DEBUG("Requesting abort of async job: %s",
+              qemuDomainAsyncJobTypeToString(priv->job.asyncJob));
+
+    priv->job.asyncAbort = true;
 }
 
 static int

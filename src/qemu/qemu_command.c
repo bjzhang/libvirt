@@ -122,7 +122,7 @@ VIR_ENUM_IMPL(qemuDomainFSDriver, VIR_DOMAIN_FS_DRIVER_TYPE_LAST,
 
 
 static void
-uname_normalize (struct utsname *ut)
+uname_normalize(struct utsname *ut)
 {
     uname(ut);
 
@@ -1837,7 +1837,7 @@ qemuBuildIoEventFdStr(virBufferPtr buf,
 static int
 qemuSafeSerialParamValue(const char *value)
 {
-    if (strspn(value, QEMU_SERIAL_PARAM_ACCEPTED_CHARS) != strlen (value)) {
+    if (strspn(value, QEMU_SERIAL_PARAM_ACCEPTED_CHARS) != strlen(value)) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("driver serial '%s' contains unsafe characters"),
                        value);
@@ -2686,9 +2686,9 @@ char *qemuBuildFSStr(virDomainFSDefPtr fs,
         fs->fsdriver == VIR_DOMAIN_FS_DRIVER_TYPE_DEFAULT) {
         if (fs->accessmode == VIR_DOMAIN_FS_ACCESSMODE_MAPPED) {
             virBufferAddLit(&opt, ",security_model=mapped");
-        } else if(fs->accessmode == VIR_DOMAIN_FS_ACCESSMODE_PASSTHROUGH) {
+        } else if (fs->accessmode == VIR_DOMAIN_FS_ACCESSMODE_PASSTHROUGH) {
             virBufferAddLit(&opt, ",security_model=passthrough");
-        } else if(fs->accessmode == VIR_DOMAIN_FS_ACCESSMODE_SQUASH) {
+        } else if (fs->accessmode == VIR_DOMAIN_FS_ACCESSMODE_SQUASH) {
             virBufferAddLit(&opt, ",security_model=none");
         }
     } else {
@@ -3504,6 +3504,16 @@ qemuBuildRedirdevDevStr(virDomainDefPtr def,
         }
     }
 
+    if (dev->info.bootIndex) {
+        if (!qemuCapsGet(caps, QEMU_CAPS_USB_REDIR_BOOTINDEX)) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                           _("USB redirection booting is not "
+                             "supported by this version of QEMU"));
+            goto error;
+        }
+        virBufferAsprintf(&buf, ",bootindex=%d", dev->info.bootIndex);
+    }
+
     if (qemuBuildDeviceAddressStr(&buf, &dev->info, caps) < 0)
         goto error;
 
@@ -3540,6 +3550,8 @@ qemuBuildUSBHostdevDevStr(virDomainHostdevDefPtr dev,
                           dev->source.subsys.u.usb.device);
     }
     virBufferAsprintf(&buf, ",id=%s", dev->info->alias);
+    if (dev->info->bootIndex)
+        virBufferAsprintf(&buf, ",bootindex=%d", dev->info->bootIndex);
 
     if (qemuBuildDeviceAddressStr(&buf, dev->info, caps) < 0)
         goto error;
@@ -3631,7 +3643,7 @@ qemuBuildChrChardevStr(virDomainChrSourceDefPtr dev, const char *alias,
     virBuffer buf = VIR_BUFFER_INITIALIZER;
     bool telnet;
 
-    switch(dev->type) {
+    switch (dev->type) {
     case VIR_DOMAIN_CHR_TYPE_NULL:
         virBufferAsprintf(&buf, "null,id=char%s", alias);
         break;
@@ -4429,7 +4441,7 @@ qemuBuildCommandLine(virConnectPtr conn,
                      virDomainSnapshotObjPtr snapshot,
                      enum virNetDevVPortProfileOp vmop)
 {
-    int i;
+    int i, j;
     struct utsname ut;
     int disableKQEMU = 0;
     int enableKQEMU = 0;
@@ -4446,6 +4458,16 @@ qemuBuildCommandLine(virConnectPtr conn,
     int usbcontroller = 0;
     bool usblegacy = false;
     uname_normalize(&ut);
+    int contOrder[] = {
+        /* We don't add an explicit IDE or FD controller because the
+         * provided PIIX4 device already includes one. It isn't possible to
+         * remove the PIIX4. */
+        VIR_DOMAIN_CONTROLLER_TYPE_USB,
+        VIR_DOMAIN_CONTROLLER_TYPE_SCSI,
+        VIR_DOMAIN_CONTROLLER_TYPE_SATA,
+        VIR_DOMAIN_CONTROLLER_TYPE_VIRTIO_SERIAL,
+        VIR_DOMAIN_CONTROLLER_TYPE_CCID,
+    };
 
     VIR_DEBUG("conn=%p driver=%p def=%p mon=%p json=%d "
               "caps=%p migrateFrom=%s migrateFD=%d "
@@ -5024,61 +5046,59 @@ qemuBuildCommandLine(virConnectPtr conn,
     }
 
     if (qemuCapsGet(caps, QEMU_CAPS_DEVICE)) {
-        for (i = 0 ; i < def->ncontrollers ; i++) {
-            virDomainControllerDefPtr cont = def->controllers[i];
+        for (j = 0; j < ARRAY_CARDINALITY(contOrder); j++) {
+            for (i = 0; i < def->ncontrollers; i++) {
+                virDomainControllerDefPtr cont = def->controllers[i];
 
-            /* We don't add an explicit IDE or FD controller because the
-             * provided PIIX4 device already includes one. It isn't possible to
-             * remove the PIIX4. */
-            if (cont->type == VIR_DOMAIN_CONTROLLER_TYPE_IDE ||
-                cont->type == VIR_DOMAIN_CONTROLLER_TYPE_FDC)
-                continue;
+                if (cont->type != contOrder[j])
+                    continue;
 
-             /* Also, skip USB controllers with type none.*/
-            if (cont->type == VIR_DOMAIN_CONTROLLER_TYPE_USB &&
-                cont->model == VIR_DOMAIN_CONTROLLER_MODEL_USB_NONE) {
-                usbcontroller = -1; /* mark we don't want a controller */
-                continue;
-            }
+                /* Also, skip USB controllers with type none.*/
+                if (cont->type == VIR_DOMAIN_CONTROLLER_TYPE_USB &&
+                    cont->model == VIR_DOMAIN_CONTROLLER_MODEL_USB_NONE) {
+                    usbcontroller = -1; /* mark we don't want a controller */
+                    continue;
+                }
 
-            /* Only recent QEMU implements a SATA (AHCI) controller */
-            if (cont->type == VIR_DOMAIN_CONTROLLER_TYPE_SATA) {
-                if (!qemuCapsGet(caps, QEMU_CAPS_ICH9_AHCI)) {
-                    virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                                   _("SATA is not supported with this "
-                                     "QEMU binary"));
-                    goto error;
+                /* Only recent QEMU implements a SATA (AHCI) controller */
+                if (cont->type == VIR_DOMAIN_CONTROLLER_TYPE_SATA) {
+                    if (!qemuCapsGet(caps, QEMU_CAPS_ICH9_AHCI)) {
+                        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                                       _("SATA is not supported with this "
+                                         "QEMU binary"));
+                        goto error;
+                    } else {
+                        char *devstr;
+
+                        virCommandAddArg(cmd, "-device");
+                        if (!(devstr = qemuBuildControllerDevStr(def, cont,
+                                                                 caps, NULL)))
+                            goto error;
+
+                        virCommandAddArg(cmd, devstr);
+                        VIR_FREE(devstr);
+                    }
+                } else if (cont->type == VIR_DOMAIN_CONTROLLER_TYPE_USB &&
+                           cont->model == -1 &&
+                           !qemuCapsGet(caps, QEMU_CAPS_PIIX3_USB_UHCI)) {
+                    if (usblegacy) {
+                        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                                       _("Multiple legacy USB controllers are "
+                                         "not supported"));
+                        goto error;
+                    }
+                    usblegacy = true;
                 } else {
-                    char *devstr;
-
                     virCommandAddArg(cmd, "-device");
-                    if (!(devstr = qemuBuildControllerDevStr(def, cont,
-                                                             caps, NULL)))
+
+                    char *devstr;
+                    if (!(devstr = qemuBuildControllerDevStr(def, cont, caps,
+                                                             &usbcontroller)))
                         goto error;
 
                     virCommandAddArg(cmd, devstr);
                     VIR_FREE(devstr);
                 }
-            } else if (cont->type == VIR_DOMAIN_CONTROLLER_TYPE_USB &&
-                       cont->model == -1 &&
-                       !qemuCapsGet(caps, QEMU_CAPS_PIIX3_USB_UHCI)) {
-                if (usblegacy) {
-                    virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                                   _("Multiple legacy USB controllers are "
-                                     "not supported"));
-                    goto error;
-                }
-                usblegacy = true;
-            } else {
-                virCommandAddArg(cmd, "-device");
-
-                char *devstr;
-                if (!(devstr = qemuBuildControllerDevStr(def, cont, caps,
-                                                         &usbcontroller)))
-                    goto error;
-
-                virCommandAddArg(cmd, devstr);
-                VIR_FREE(devstr);
             }
         }
     }
@@ -5553,7 +5573,6 @@ qemuBuildCommandLine(virConnectPtr conn,
         virDomainSmartcardDefPtr smartcard = def->smartcards[0];
         char *devstr;
         virBuffer opt = VIR_BUFFER_INITIALIZER;
-        int j;
         const char *database;
 
         if (def->nsmartcards > 1 ||
@@ -5728,7 +5747,7 @@ qemuBuildCommandLine(virConnectPtr conn,
         char *addr;
         int port;
 
-        switch(channel->targetType) {
+        switch (channel->targetType) {
         case VIR_DOMAIN_CHR_CHANNEL_TARGET_TYPE_GUESTFWD:
             if (!qemuCapsGet(caps, QEMU_CAPS_CHARDEV) ||
                 !qemuCapsGet(caps, QEMU_CAPS_DEVICE)) {
@@ -5796,7 +5815,7 @@ qemuBuildCommandLine(virConnectPtr conn,
         virDomainChrDefPtr console = def->consoles[i];
         char *devstr;
 
-        switch(console->targetType) {
+        switch (console->targetType) {
         case VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_VIRTIO:
             if (!qemuCapsGet(caps, QEMU_CAPS_DEVICE)) {
                 virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
@@ -6016,6 +6035,8 @@ qemuBuildCommandLine(virConnectPtr conn,
         char *netAddr = NULL;
         int ret;
         int defaultMode = def->graphics[0]->data.spice.defaultMode;
+        int port = def->graphics[0]->data.spice.port;
+        int tlsPort = def->graphics[0]->data.spice.tlsPort;
 
         if (!qemuCapsGet(caps, QEMU_CAPS_SPICE)) {
             virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
@@ -6023,17 +6044,19 @@ qemuBuildCommandLine(virConnectPtr conn,
             goto error;
         }
 
-        virBufferAsprintf(&opt, "port=%u", def->graphics[0]->data.spice.port);
+        if (port > 0 || tlsPort <= 0)
+            virBufferAsprintf(&opt, "port=%u", port);
 
-        if (def->graphics[0]->data.spice.tlsPort > 0) {
+        if (tlsPort > 0) {
             if (!driver->spiceTLS) {
                 virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
                                _("spice TLS port set in XML configuration,"
                                  " but TLS is disabled in qemu.conf"));
                 goto error;
             }
-            virBufferAsprintf(&opt, ",tls-port=%u",
-                              def->graphics[0]->data.spice.tlsPort);
+            if (port > 0)
+                virBufferAddChar(&opt, ',');
+            virBufferAsprintf(&opt, "tls-port=%u", tlsPort);
         }
 
         switch (virDomainGraphicsListenGetType(def->graphics[0], 0)) {
@@ -6428,16 +6451,27 @@ qemuBuildCommandLine(virConnectPtr conn,
 
         if (hostdev->info->bootIndex) {
             if (hostdev->mode != VIR_DOMAIN_HOSTDEV_MODE_SUBSYS ||
-                hostdev->source.subsys.type != VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_PCI) {
+                (hostdev->source.subsys.type != VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_PCI &&
+                 hostdev->source.subsys.type != VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_USB)) {
                 virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
                                _("booting from assigned devices is only"
-                                 " supported for PCI devices"));
+                                 " supported for PCI and USB devices"));
                 goto error;
-            } else if (!qemuCapsGet(caps, QEMU_CAPS_PCI_BOOTINDEX)) {
-                virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                               _("booting from assigned PCI devices is not"
-                                 " supported with this version of qemu"));
-                goto error;
+            } else {
+                if (hostdev->source.subsys.type == VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_PCI &&
+                    !qemuCapsGet(caps, QEMU_CAPS_PCI_BOOTINDEX)) {
+                    virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                                   _("booting from assigned PCI devices is not"
+                                     " supported with this version of qemu"));
+                    goto error;
+                }
+                if (hostdev->source.subsys.type == VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_USB &&
+                    !qemuCapsGet(caps, QEMU_CAPS_USB_HOST_BOOTINDEX)) {
+                    virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                                   _("booting from assigned USB devices is not"
+                                     " supported with this version of qemu"));
+                    goto error;
+                }
             }
         }
 
@@ -8408,7 +8442,7 @@ virDomainDefPtr qemuParseCommandLine(virCapsPtr caps,
                 if (!(def->os.machine = strndup(val, params - val)))
                     goto no_memory;
 
-                while(params++) {
+                while (params++) {
                     /* prepared for more "-machine" parameters */
                     char *tmp = params;
                     params = strchr(params, ',');
@@ -8581,7 +8615,7 @@ virDomainDefPtr qemuParseCommandLine(virCapsPtr caps,
             }
         } else if (STREQ(arg, "-watchdog")) {
             WANT_VALUE();
-            int model = virDomainWatchdogModelTypeFromString (val);
+            int model = virDomainWatchdogModelTypeFromString(val);
 
             if (model != -1) {
                 virDomainWatchdogDefPtr wd;
@@ -8593,7 +8627,7 @@ virDomainDefPtr qemuParseCommandLine(virCapsPtr caps,
             }
         } else if (STREQ(arg, "-watchdog-action") && def->watchdog) {
             WANT_VALUE();
-            int action = virDomainWatchdogActionTypeFromString (val);
+            int action = virDomainWatchdogActionTypeFromString(val);
 
             if (action != -1)
                 def->watchdog->action = action;

@@ -295,6 +295,7 @@ virNetworkAssignDef(virNetworkObjListPtr nets,
 
     if ((network = virNetworkFindByName(nets, def->name))) {
         if (virNetworkObjAssignDef(network, def, live) < 0) {
+            virNetworkObjUnlock(network);
             return NULL;
         }
         return network;
@@ -359,7 +360,7 @@ virNetworkObjSetDefTransient(virNetworkObjPtr network, bool live)
 void
 virNetworkObjUnsetDefTransient(virNetworkObjPtr network)
 {
-    if (network->def) {
+    if (network->newDef) {
         virNetworkDefFree(network->def);
         network->def = network->newDef;
         network->newDef = NULL;
@@ -1375,7 +1376,7 @@ virNetworkDefParseXML(xmlXPathContextPtr ctxt)
 
         forwardDev = virXPathString("string(./@dev)", ctxt);
         forwardManaged = virXPathString("string(./@managed)", ctxt);
-        if(forwardManaged != NULL) {
+        if (forwardManaged != NULL) {
             if (STRCASEEQ(forwardManaged, "yes"))
                 def->managed = 1;
         }
@@ -3060,7 +3061,7 @@ cleanup:
 int
 virNetworkObjIsDuplicate(virNetworkObjListPtr doms,
                          virNetworkDefPtr def,
-                         unsigned int check_active)
+                         bool check_active)
 {
     int ret = -1;
     int dupVM = 0;
@@ -3123,8 +3124,8 @@ void virNetworkObjUnlock(virNetworkObjPtr obj)
 
 #define MATCH(FLAG) (flags & (FLAG))
 static bool
-virNetworkMatch (virNetworkObjPtr netobj,
-                 unsigned int flags)
+virNetworkMatch(virNetworkObjPtr netobj,
+                unsigned int flags)
 {
     /* filter by active state */
     if (MATCH(VIR_CONNECT_LIST_NETWORKS_FILTERS_ACTIVE) &&

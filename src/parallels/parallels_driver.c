@@ -87,7 +87,8 @@ parallelsDriverUnlock(parallelsConnPtr driver)
 }
 
 static int
-parallelsDefaultConsoleType(const char *ostype ATTRIBUTE_UNUSED)
+parallelsDefaultConsoleType(const char *ostype ATTRIBUTE_UNUSED,
+                            const char *arch ATTRIBUTE_UNUSED)
 {
     return VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SERIAL;
 }
@@ -1089,7 +1090,7 @@ parallelsDomainGetAutostart(virDomainPtr domain, int *autostart)
     return ret;
 }
 
-typedef int (*parallelsChangeStateFunc)    (virDomainObjPtr privdom);
+typedef int (*parallelsChangeStateFunc)(virDomainObjPtr privdom);
 #define PARALLELS_UUID(x)     (((parallelsDomObjPtr)(x->privateData))->uuid)
 
 static int
@@ -1283,7 +1284,7 @@ parallelsApplySerialParams(virDomainChrDefPtr *oldserials, int nold,
             !STREQ_NULLABLE(oldserial->source.data.file.path,
                             newserial->source.data.file.path))
             goto error;
-        if(newserial->source.type == VIR_DOMAIN_CHR_TYPE_UNIX &&
+        if (newserial->source.type == VIR_DOMAIN_CHR_TYPE_UNIX &&
            (!STREQ_NULLABLE(oldserial->source.data.nix.path,
                             newserial->source.data.nix.path) ||
             oldserial->source.data.nix.listen == newserial->source.data.nix.listen)) {

@@ -179,6 +179,7 @@ typedef enum {
     VIR_DOMAIN_PAUSED_WATCHDOG = 6,     /* paused due to a watchdog event */
     VIR_DOMAIN_PAUSED_FROM_SNAPSHOT = 7, /* paused after restoring from snapshot */
     VIR_DOMAIN_PAUSED_SHUTTING_DOWN = 8, /* paused during shutdown process */
+    VIR_DOMAIN_PAUSED_SNAPSHOT = 9,      /* paused while creating a snapshot */
 
 #ifdef VIR_ENUM_SENTINELS
     VIR_DOMAIN_PAUSED_LAST
@@ -530,17 +531,19 @@ typedef virTypedParameter *virTypedParameterPtr;
 typedef struct _virNodeInfo virNodeInfo;
 
 struct _virNodeInfo {
-    char model[32];     /* string indicating the CPU model */
-    unsigned long memory;/* memory size in kilobytes */
-    unsigned int cpus;  /* the number of active CPUs */
-    unsigned int mhz;   /* expected CPU frequency */
-    unsigned int nodes; /* the number of NUMA cell, 1 for unusual NUMA
-                           topologies or uniform memory access; check
-                           capabilities XML for the actual NUMA topology */
-    unsigned int sockets;/* number of CPU sockets per node if nodes > 1,
-                            total number of CPU sockets otherwise */
-    unsigned int cores; /* number of cores per socket */
-    unsigned int threads;/* number of threads per core */
+    char model[32];       /* string indicating the CPU model */
+    unsigned long memory; /* memory size in kilobytes */
+    unsigned int cpus;    /* the number of active CPUs */
+    unsigned int mhz;     /* expected CPU frequency */
+    unsigned int nodes;   /* the number of NUMA cell, 1 for unusual NUMA
+                             topologies or uniform memory access; check
+                             capabilities XML for the actual NUMA topology */
+    unsigned int sockets; /* number of CPU sockets per node if nodes > 1,
+                             1 in case of unusual NUMA topology */
+    unsigned int cores;   /* number of cores per socket, total number of
+                             processors in case of unusual NUMA topology*/
+    unsigned int threads; /* number of threads per core, 1 in case of
+                             unusual numa topology */
 };
 
 /**
@@ -3158,6 +3161,7 @@ typedef enum {
     VIR_DOMAIN_EVENT_SUSPENDED_WATCHDOG = 3,  /* Suspended due to a watchdog firing */
     VIR_DOMAIN_EVENT_SUSPENDED_RESTORED = 4,  /* Restored from paused state file */
     VIR_DOMAIN_EVENT_SUSPENDED_FROM_SNAPSHOT = 5, /* Restored from paused snapshot */
+    VIR_DOMAIN_EVENT_SUSPENDED_API_ERROR = 6, /* suspended after failure during libvirt API call */
 
 #ifdef VIR_ENUM_SENTINELS
     VIR_DOMAIN_EVENT_SUSPENDED_LAST
@@ -3770,6 +3774,9 @@ typedef enum {
                                                           the domain */
     VIR_DOMAIN_SNAPSHOT_CREATE_ATOMIC      = (1 << 7), /* atomically avoid
                                                           partial changes */
+    VIR_DOMAIN_SNAPSHOT_CREATE_LIVE        = (1 << 8), /* create the snapshot
+                                                          while the guest is
+                                                          running */
 } virDomainSnapshotCreateFlags;
 
 /* Take a snapshot of the current VM state */

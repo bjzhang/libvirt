@@ -155,6 +155,57 @@ networkRadvdConfigFileName(const char *netname)
     return configfile;
 }
 
+/* do needed cleanup steps and remove the network from the list */
+static int
+networkRemoveInactive(struct network_driver *driver,
+                      virNetworkObjPtr net)
+{
+    char *leasefile = NULL;
+    char *radvdconfigfile = NULL;
+    char *radvdpidbase = NULL;
+    dnsmasqContext *dctx = NULL;
+    virNetworkDefPtr def = virNetworkObjGetPersistentDef(net);
+
+    int ret = -1;
+
+    /* remove the (possibly) existing dnsmasq and radvd files */
+    if (!(dctx = dnsmasqContextNew(def->name, DNSMASQ_STATE_DIR)))
+        goto cleanup;
+
+    if (!(leasefile = networkDnsmasqLeaseFileName(def->name)))
+        goto cleanup;
+
+    if (!(radvdconfigfile = networkRadvdConfigFileName(def->name)))
+        goto no_memory;
+
+    if (!(radvdpidbase = networkRadvdPidfileBasename(def->name)))
+        goto no_memory;
+
+    /* dnsmasq */
+    dnsmasqDelete(dctx);
+    unlink(leasefile);
+
+    /* radvd */
+    unlink(radvdconfigfile);
+    virPidFileDelete(NETWORK_PID_DIR, radvdpidbase);
+
+    /* remove the network definition */
+    virNetworkRemoveInactive(&driver->networks, net);
+
+    ret = 0;
+
+cleanup:
+    VIR_FREE(leasefile);
+    VIR_FREE(radvdconfigfile);
+    VIR_FREE(radvdpidbase);
+    dnsmasqContextFree(dctx);
+    return ret;
+
+no_memory:
+    virReportOOMError();
+    goto cleanup;
+}
+
 static char *
 networkBridgeDummyNicName(const char *brname)
 {
@@ -299,7 +350,7 @@ networkStartup(int privileged) {
                         "%s/log/libvirt/qemu", LOCALSTATEDIR) == -1)
             goto out_of_memory;
 
-        if ((base = strdup (SYSCONFDIR "/libvirt")) == NULL)
+        if ((base = strdup(SYSCONFDIR "/libvirt")) == NULL)
             goto out_of_memory;
     } else {
         char *userdir = virGetUserCacheDirectory();
@@ -846,6 +897,8 @@ networkStartDhcpDaemon(virNetworkObjPtr network)
     char *pidfile = NULL;
     int ret = -1;
     dnsmasqContext *dctx = NULL;
+    virNetworkIpDefPtr ipdef;
+    int i;
 
     if (!virNetworkDefGetIpByIndex(network->def, AF_UNSPEC, 0)) {
         /* no IPv6 addresses, so we don't need to run radvd */
@@ -885,6 +938,18 @@ networkStartDhcpDaemon(virNetworkObjPtr network)
     ret = networkBuildDhcpDaemonCommandLine(network, &cmd, pidfile, dctx);
     if (ret < 0)
         goto cleanup;
+
+    /* populate dnsmasq hosts file */
+    for (i = 0; (ipdef = virNetworkDefGetIpByIndex(network->def, AF_UNSPEC, i)); i++) {
+        if (VIR_SOCKET_ADDR_IS_FAMILY(&ipdef->address, AF_INET) &&
+            (ipdef->nranges || ipdef->nhosts)) {
+            if (networkBuildDnsmasqHostsfile(dctx, ipdef,
+                                             network->def->dns) < 0)
+                goto cleanup;
+
+            break;
+        }
+    }
 
     ret = dnsmasqSave(dctx);
     if (ret < 0)
@@ -1972,7 +2037,7 @@ networkCheckRouteCollision(virNetworkObjPtr network)
 
     VIR_DEBUG("%s output:\n%s", PROC_NET_ROUTE, buf);
 
-    if (!STRPREFIX (buf, "Iface"))
+    if (!STRPREFIX(buf, "Iface"))
         goto out;
 
     /* First line is just headings, skip it */
@@ -2616,11 +2681,48 @@ cleanup:
 
 
 static int
-networkValidate(virNetworkDefPtr def)
+networkValidate(struct network_driver *driver,
+                virNetworkDefPtr def,
+                bool check_active)
 {
     int ii;
     bool vlanUsed, vlanAllowed, badVlanUse = false;
     virPortGroupDefPtr defaultPortGroup = NULL;
+    virNetworkIpDefPtr ipdef;
+    bool ipv4def = false;
+    int i;
+
+    /* check for duplicate networks */
+    if (virNetworkObjIsDuplicate(&driver->networks, def, check_active) < 0)
+        return -1;
+
+    /* Only the three L3 network types that are configured by libvirt
+     * need to have a bridge device name / mac address provided
+     */
+    if (def->forwardType == VIR_NETWORK_FORWARD_NONE ||
+        def->forwardType == VIR_NETWORK_FORWARD_NAT ||
+        def->forwardType == VIR_NETWORK_FORWARD_ROUTE) {
+
+        if (virNetworkSetBridgeName(&driver->networks, def, 1))
+            return -1;
+
+        virNetworkSetBridgeMacAddr(def);
+    }
+
+    /* We only support dhcp on one IPv4 address per defined network */
+    for (i = 0; (ipdef = virNetworkDefGetIpByIndex(def, AF_INET, i)); i++) {
+        if (ipdef->nranges || ipdef->nhosts) {
+            if (ipv4def) {
+                virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                               _("Multiple dhcp sections found. "
+                                 "dhcp is supported only for a "
+                                 "single IPv4 address on each network"));
+                return -1;
+            } else {
+                ipv4def = true;
+            }
+        }
+    }
 
     /* The only type of networks that currently support transparent
      * vlan configuration are those using hostdev sr-iov devices from
@@ -2690,23 +2792,7 @@ static virNetworkPtr networkCreate(virConnectPtr conn, const char *xml) {
     if (!(def = virNetworkDefParseString(xml)))
         goto cleanup;
 
-    if (virNetworkObjIsDuplicate(&driver->networks, def, 1) < 0)
-        goto cleanup;
-
-    /* Only the three L3 network types that are configured by libvirt
-     * need to have a bridge device name / mac address provided
-     */
-    if (def->forwardType == VIR_NETWORK_FORWARD_NONE ||
-        def->forwardType == VIR_NETWORK_FORWARD_NAT ||
-        def->forwardType == VIR_NETWORK_FORWARD_ROUTE) {
-
-        if (virNetworkSetBridgeName(&driver->networks, def, 1))
-            goto cleanup;
-
-        virNetworkSetBridgeMacAddr(def);
-    }
-
-    if (networkValidate(def) < 0)
+    if (networkValidate(driver, def, true) < 0)
        goto cleanup;
 
     /* NB: "live" is false because this transient network hasn't yet
@@ -2736,75 +2822,35 @@ cleanup:
 
 static virNetworkPtr networkDefine(virConnectPtr conn, const char *xml) {
     struct network_driver *driver = conn->networkPrivateData;
-    virNetworkIpDefPtr ipdef, ipv4def = NULL;
-    virNetworkDefPtr def;
+    virNetworkDefPtr def = NULL;
     bool freeDef = true;
     virNetworkObjPtr network = NULL;
     virNetworkPtr ret = NULL;
-    int ii;
-    dnsmasqContext* dctx = NULL;
 
     networkDriverLock(driver);
 
     if (!(def = virNetworkDefParseString(xml)))
         goto cleanup;
 
-    if (virNetworkObjIsDuplicate(&driver->networks, def, 0) < 0)
-        goto cleanup;
-
-    /* Only the three L3 network types that are configured by libvirt
-     * need to have a bridge device name / mac address provided
-     */
-    if (def->forwardType == VIR_NETWORK_FORWARD_NONE ||
-        def->forwardType == VIR_NETWORK_FORWARD_NAT ||
-        def->forwardType == VIR_NETWORK_FORWARD_ROUTE) {
-
-        if (virNetworkSetBridgeName(&driver->networks, def, 1))
-            goto cleanup;
-
-        virNetworkSetBridgeMacAddr(def);
-    }
-
-    /* We only support dhcp on one IPv4 address per defined network */
-    for (ii = 0;
-         (ipdef = virNetworkDefGetIpByIndex(def, AF_UNSPEC, ii));
-         ii++) {
-        if (VIR_SOCKET_ADDR_IS_FAMILY(&ipdef->address, AF_INET)) {
-            if (ipdef->nranges || ipdef->nhosts) {
-                if (ipv4def) {
-                    virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
-                                   _("Multiple dhcp sections found. "
-                                     "dhcp is supported only for a "
-                                     "single IPv4 address on each network"));
-                    goto cleanup;
-                } else {
-                    ipv4def = ipdef;
-                }
-            }
-        }
-    }
-
-    if (networkValidate(def) < 0)
+    if (networkValidate(driver, def, false) < 0)
        goto cleanup;
 
-    if (!(network = virNetworkAssignDef(&driver->networks, def, false)))
-        goto cleanup;
-    freeDef = false;
+    if ((network = virNetworkFindByName(&driver->networks, def->name))) {
+        network->persistent = 1;
+        if (virNetworkObjAssignDef(network, def, false) < 0)
+            goto cleanup;
+    } else {
+        if (!(network = virNetworkAssignDef(&driver->networks, def, false)))
+            goto cleanup;
+    }
 
-    network->persistent = 1;
+    /* def was asigned */
+    freeDef = false;
 
     if (virNetworkSaveConfig(driver->networkConfigDir, def) < 0) {
         virNetworkRemoveInactive(&driver->networks, network);
         network = NULL;
         goto cleanup;
-    }
-
-    if (ipv4def) {
-        dctx = dnsmasqContextNew(def->name, DNSMASQ_STATE_DIR);
-        if (dctx == NULL ||
-            networkBuildDnsmasqHostsfile(dctx, ipv4def, def->dns) < 0 ||
-            dnsmasqSave(dctx) < 0)
-            goto cleanup;
     }
 
     VIR_INFO("Defining network '%s'", def->name);
@@ -2813,19 +2859,18 @@ static virNetworkPtr networkDefine(virConnectPtr conn, const char *xml) {
 cleanup:
     if (freeDef)
        virNetworkDefFree(def);
-    dnsmasqContextFree(dctx);
     if (network)
         virNetworkObjUnlock(network);
     networkDriverUnlock(driver);
     return ret;
 }
 
-static int networkUndefine(virNetworkPtr net) {
+static int
+networkUndefine(virNetworkPtr net) {
     struct network_driver *driver = net->conn->networkPrivateData;
     virNetworkObjPtr network;
-    virNetworkIpDefPtr ipdef;
-    bool dhcp_present = false, v6present = false;
-    int ret = -1, ii;
+    int ret = -1;
+    bool active = false;
 
     networkDriverLock(driver);
 
@@ -2836,70 +2881,28 @@ static int networkUndefine(virNetworkPtr net) {
         goto cleanup;
     }
 
-    if (virNetworkObjIsActive(network)) {
-        virReportError(VIR_ERR_OPERATION_INVALID,
-                       "%s", _("network is still active"));
-        goto cleanup;
-    }
+    if (virNetworkObjIsActive(network))
+        active = true;
 
     if (virNetworkDeleteConfig(driver->networkConfigDir,
                                driver->networkAutostartDir,
                                network) < 0)
         goto cleanup;
 
-    /* we only support dhcp on one IPv4 address per defined network */
-    for (ii = 0;
-         (ipdef = virNetworkDefGetIpByIndex(network->def, AF_UNSPEC, ii));
-         ii++) {
-        if (VIR_SOCKET_ADDR_IS_FAMILY(&ipdef->address, AF_INET)) {
-            if (ipdef->nranges || ipdef->nhosts)
-                dhcp_present = true;
-        } else if (VIR_SOCKET_ADDR_IS_FAMILY(&ipdef->address, AF_INET6)) {
-            v6present = true;
-        }
-    }
-
-    if (dhcp_present) {
-        char *leasefile;
-        dnsmasqContext *dctx = dnsmasqContextNew(network->def->name, DNSMASQ_STATE_DIR);
-        if (dctx == NULL)
-            goto cleanup;
-
-        dnsmasqDelete(dctx);
-        dnsmasqContextFree(dctx);
-
-        leasefile = networkDnsmasqLeaseFileName(network->def->name);
-        if (!leasefile)
-            goto cleanup;
-        unlink(leasefile);
-        VIR_FREE(leasefile);
-    }
-
-    if (v6present) {
-        char *configfile = networkRadvdConfigFileName(network->def->name);
-
-        if (!configfile) {
-            virReportOOMError();
-            goto cleanup;
-        }
-        unlink(configfile);
-        VIR_FREE(configfile);
-
-        char *radvdpidbase = networkRadvdPidfileBasename(network->def->name);
-
-        if (!(radvdpidbase)) {
-            virReportOOMError();
-            goto cleanup;
-        }
-        virPidFileDelete(NETWORK_PID_DIR, radvdpidbase);
-        VIR_FREE(radvdpidbase);
-
-    }
+    /* make the network transient */
+    network->persistent = 0;
+    virNetworkDefFree(network->newDef);
+    network->newDef = NULL;
 
     VIR_INFO("Undefining network '%s'", network->def->name);
-    virNetworkRemoveInactive(&driver->networks,
-                             network);
-    network = NULL;
+    if (!active) {
+        if (networkRemoveInactive(driver, network) < 0) {
+            network = NULL;
+            goto cleanup;
+        }
+        network = NULL;
+    }
+
     ret = 0;
 
 cleanup:
@@ -3099,10 +3102,15 @@ static int networkDestroy(virNetworkPtr net) {
         goto cleanup;
     }
 
-    ret = networkShutdownNetwork(driver, network);
+    if ((ret = networkShutdownNetwork(driver, network)) < 0)
+        goto cleanup;
+
     if (!network->persistent) {
-        virNetworkRemoveInactive(&driver->networks,
-                                 network);
+        if (networkRemoveInactive(driver, network) < 0) {
+            network = NULL;
+            ret = -1;
+            goto cleanup;
+        }
         network = NULL;
     }
 
@@ -3358,7 +3366,7 @@ networkCreateInterfacePool(virNetworkDefPtr netdef) {
             (netdef->forwardType == VIR_NETWORK_FORWARD_VEPA) ||
             (netdef->forwardType == VIR_NETWORK_FORWARD_PASSTHROUGH)) {
             netdef->forwardIfs[ii].type = VIR_NETWORK_FORWARD_HOSTDEV_DEVICE_NETDEV;
-            if(vfname[ii]) {
+            if (vfname[ii]) {
                 netdef->forwardIfs[ii].device.dev = strdup(vfname[ii]);
                 if (!netdef->forwardIfs[ii].device.dev) {
                     virReportOOMError();

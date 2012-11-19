@@ -553,7 +553,7 @@ B<Example>
 
  virsh dumpxml <domain> > domain.xml
  vi domain.xml (or make changes with your other text editor)
- virsh create < domain.xml
+ virsh create domain.xml
 
 =item B<define> I<FILE>
 
@@ -2594,7 +2594,7 @@ used to represent properties of snapshots.
 
 =item B<snapshot-create> I<domain> [I<xmlfile>] {[I<--redefine> [I<--current>]]
 | [I<--no-metadata>] [I<--halt>] [I<--disk-only>] [I<--reuse-external>]
-[I<--quiesce>] [I<--atomic>]}
+[I<--quiesce>] [I<--atomic>] [I<--live>]}
 
 Create a snapshot for domain I<domain> with the properties specified in
 I<xmlfile>.  Normally, the only properties settable for a domain snapshot
@@ -2647,6 +2647,10 @@ this.  If this flag is not specified, then some hypervisors may fail
 after partially performing the action, and B<dumpxml> must be used to
 see whether any partial changes occurred.
 
+If I<--live> is specified, libvirt takes the snapshot while the guest is
+running. This increases the size of the memory image of the external
+checkpoint. This is currently supported only for external checkpoints.
+
 Existence of snapshot metadata will prevent attempts to B<undefine>
 a persistent domain.  However, for transient domains, snapshot
 metadata is silently lost when the domain quits running (whether
@@ -2654,8 +2658,8 @@ by command such as B<destroy> or by internal guest action).
 
 =item B<snapshot-create-as> I<domain> {[I<--print-xml>]
 | [I<--no-metadata>] [I<--halt>] [I<--reuse-external>]} [I<name>]
-[I<description>] [I<--disk-only> [I<--quiesce>] [I<--atomic>]
-[[I<--diskspec>] B<diskspec>]...]
+[I<description>] [I<--disk-only> [I<--quiesce>]] [I<--atomic>]
+[[I<--live>] [I<--memspec> B<memspec>]] [I<--diskspec>] B<diskspec>]...
 
 Create a snapshot for domain I<domain> with the given <name> and
 <description>; if either value is omitted, libvirt will choose a
@@ -2665,9 +2669,16 @@ Otherwise, if I<--halt> is specified, the domain will be left in an
 inactive state after the snapshot is created, and if I<--disk-only>
 is specified, the snapshot will not include vm state.
 
-The I<--disk-only> flag is used to request a disk-only snapshot.  When
-this flag is in use, the command can also take additional I<diskspec>
-arguments to add <disk> elements to the xml.  Each <diskspec> is in the
+The I<--memspec> option can be used to control whether a checkpoint
+is internal or external.  The I<--memspec> flag is mandatory, followed
+by a B<memspec> of the form B<[file=]name[,snapshot=type]>, where
+type can be B<none>, B<internal>, or B<external>.  To include a literal
+comma in B<file=name>, escape it with a second comma.
+
+The I<--diskspec> option can be used to control how I<--disk-only> and
+external checkpoints create external files.  This option can occur
+multiple times, according to the number of <disk> elements in the domain
+xml.  Each <diskspec> is in the
 form B<disk[,snapshot=type][,driver=type][,file=name]>.  To include a
 literal comma in B<disk> or in B<file=name>, escape it with a second
 comma.  A literal I<--diskspec> must precede each B<diskspec> unless
@@ -2699,6 +2710,10 @@ either succeeds, or fails with no changes; not all hypervisors support
 this.  If this flag is not specified, then some hypervisors may fail
 after partially performing the action, and B<dumpxml> must be used to
 see whether any partial changes occurred.
+
+If I<--live> is specified, libvirt takes the snapshot while the guest is
+running. This increases the size of the memory image of the external
+checkpoint. This is currently supported only for external checkpoints.
 
 =item B<snapshot-current> I<domain> {[I<--name>] | [I<--security-info>]
 | [I<snapshotname>]}

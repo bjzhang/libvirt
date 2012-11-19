@@ -79,13 +79,14 @@ static int linuxNodeGetMemoryStats(FILE *meminfo,
                                    int *nparams);
 
 /* Return the positive decimal contents of the given
- * DIR/cpu%u/FILE, or -1 on error.  If MISSING_OK and the
- * file could not be found, return 1 instead of an error; this is
- * because some machines cannot hot-unplug cpu0, or because
- * hot-unplugging is disabled.  */
+ * DIR/cpu%u/FILE, or -1 on error.  If DEFAULT_VALUE is non-negative
+ * and the file could not be found, return that instead of an error;
+ * this is useful for machines that cannot hot-unplug cpu0, or where
+ * hot-unplugging is disabled, or where the kernel is too old
+ * to support NUMA cells, etc.  */
 static int
 virNodeGetCpuValue(const char *dir, unsigned int cpu, const char *file,
-                   bool missing_ok)
+                   int default_value)
 {
     char *path;
     FILE *pathfp;
@@ -100,8 +101,8 @@ virNodeGetCpuValue(const char *dir, unsigned int cpu, const char *file,
 
     pathfp = fopen(path, "r");
     if (pathfp == NULL) {
-        if (missing_ok && errno == ENOENT)
-            value = 1;
+        if (default_value >= 0 && errno == ENOENT)
+            value = default_value;
         else
             virReportSystemError(errno, _("cannot open %s"), path);
         goto cleanup;
@@ -174,7 +175,7 @@ static int
 virNodeParseSocket(const char *dir, unsigned int cpu)
 {
     int ret = virNodeGetCpuValue(dir, cpu, "topology/physical_package_id",
-                                 false);
+                                 0);
 # if defined(__powerpc__) || \
     defined(__powerpc64__) || \
     defined(__s390__) || \
@@ -204,7 +205,12 @@ CPU_COUNT(cpu_set_t *set)
 static int
 ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2)
 ATTRIBUTE_NONNULL(3) ATTRIBUTE_NONNULL(4)
-virNodeParseNode(const char *node, int *sockets, int *cores, int *threads)
+ATTRIBUTE_NONNULL(5)
+virNodeParseNode(const char *node,
+                 int *sockets,
+                 int *cores,
+                 int *threads,
+                 int *offline)
 {
     int ret = -1;
     int processors = 0;
@@ -236,14 +242,15 @@ virNodeParseNode(const char *node, int *sockets, int *cores, int *threads)
         if (sscanf(cpudirent->d_name, "cpu%u", &cpu) != 1)
             continue;
 
-        if ((online = virNodeGetCpuValue(node, cpu, "online", true)) < 0)
+        if ((online = virNodeGetCpuValue(node, cpu, "online", 1)) < 0)
             goto cleanup;
 
         if (!online)
             continue;
 
         /* Parse socket */
-        sock = virNodeParseSocket(node, cpu);
+        if ((sock = virNodeParseSocket(node, cpu)) < 0)
+            goto cleanup;
         CPU_SET(sock, &sock_map);
 
         if (sock > sock_max)
@@ -275,16 +282,19 @@ virNodeParseNode(const char *node, int *sockets, int *cores, int *threads)
         if (sscanf(cpudirent->d_name, "cpu%u", &cpu) != 1)
             continue;
 
-        if ((online = virNodeGetCpuValue(node, cpu, "online", true)) < 0)
+        if ((online = virNodeGetCpuValue(node, cpu, "online", 1)) < 0)
             goto cleanup;
 
-        if (!online)
+        if (!online) {
+            (*offline)++;
             continue;
+        }
 
         processors++;
 
         /* Parse socket */
-        sock = virNodeParseSocket(node, cpu);
+        if ((sock = virNodeParseSocket(node, cpu)) < 0)
+            goto cleanup;
         if (!CPU_ISSET(sock, &sock_map)) {
             virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                            _("CPU socket topology has changed"));
@@ -297,7 +307,7 @@ virNodeParseNode(const char *node, int *sockets, int *cores, int *threads)
         /* logical cpu is equivalent to a core on s390 */
         core = cpu;
 # else
-        core = virNodeGetCpuValue(node, cpu, "topology/core_id", false);
+        core = virNodeGetCpuValue(node, cpu, "topology/core_id", 0);
 # endif
 
         CPU_SET(core, &core_maps[sock]);
@@ -348,7 +358,7 @@ int linuxNodeInfoCPUPopulate(FILE *cpuinfo,
     char line[1024];
     DIR *nodedir = NULL;
     struct dirent *nodedirent = NULL;
-    int cpus, cores, socks, threads;
+    int cpus, cores, socks, threads, offline = 0;
     unsigned int node;
     int ret = -1;
     char *sysfs_nodedir = NULL;
@@ -469,8 +479,8 @@ int linuxNodeInfoCPUPopulate(FILE *cpuinfo,
             goto cleanup;
         }
 
-        if ((cpus = virNodeParseNode(sysfs_cpudir, &socks,
-                                     &cores, &threads)) < 0)
+        if ((cpus = virNodeParseNode(sysfs_cpudir, &socks, &cores,
+                                     &threads, &offline)) < 0)
             goto cleanup;
 
         VIR_FREE(sysfs_cpudir);
@@ -505,7 +515,8 @@ fallback:
         goto cleanup;
     }
 
-    if ((cpus = virNodeParseNode(sysfs_cpudir, &socks, &cores, &threads)) < 0)
+    if ((cpus = virNodeParseNode(sysfs_cpudir, &socks, &cores,
+                                 &threads, &offline)) < 0)
         goto cleanup;
 
     nodeinfo->nodes = 1;
@@ -529,6 +540,23 @@ done:
     if (nodeinfo->threads == 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s", _("no threads found"));
         goto cleanup;
+    }
+
+    /* Now check if the topology makes sense. There are machines that don't
+     * expose their real number of nodes or for example the AMD Bulldozer
+     * architecture that exposes their Clustered integer core modules as both
+     * threads and cores. This approach throws off our detection. Unfortunately
+     * the nodeinfo structure isn't designed to carry the full topology so
+     * we're going to lie about the detected topology to notify the user
+     * to check the host capabilities for the actual topology. */
+    if ((nodeinfo->nodes *
+         nodeinfo->sockets *
+         nodeinfo->cores *
+         nodeinfo->threads) != (nodeinfo->cpus + offline)) {
+        nodeinfo->nodes = 1;
+        nodeinfo->sockets = 1;
+        nodeinfo->cores = nodeinfo->cpus + offline;
+        nodeinfo->threads = 1;
     }
 
     ret = 0;
@@ -764,10 +792,8 @@ linuxParseCPUmax(const char *path)
     char *tmp;
     int ret = -1;
 
-    if (virFileReadAll(path, 5 * VIR_DOMAIN_CPUMASK_LEN, &str) < 0) {
-        virReportOOMError();
+    if (virFileReadAll(path, 5 * VIR_DOMAIN_CPUMASK_LEN, &str) < 0)
         goto cleanup;
-    }
 
     tmp = str;
     do {
@@ -839,7 +865,7 @@ int nodeGetInfo(virConnectPtr conn ATTRIBUTE_UNUSED, virNodeInfoPtr nodeinfo) {
         goto cleanup;
 
     /* Convert to KB. */
-    nodeinfo->memory = physmem_total () / 1024;
+    nodeinfo->memory = physmem_total() / 1024;
 
 cleanup:
     VIR_FORCE_FCLOSE(cpuinfo);
@@ -953,11 +979,35 @@ int
 nodeGetCPUCount(void)
 {
 #ifdef __linux__
-    /* XXX should we also work on older kernels, like RHEL5, that lack
-     * cpu/present and cpu/online files?  Those kernels also lack cpu
-     * hotplugging, so it would be a matter of finding the largest
-     * cpu/cpuNN directory, and returning NN + 1 */
-    return linuxParseCPUmax(SYSFS_SYSTEM_PATH "/cpu/present");
+    /* To support older kernels that lack cpu/present, such as 2.6.18
+     * in RHEL5, we fall back to count cpu/cpuNN entries; this assumes
+     * that such kernels also lack hotplug, and therefore cpu/cpuNN
+     * will be consecutive.
+     */
+    char *cpupath = NULL;
+    int i = 0;
+
+    if (virFileExists(SYSFS_SYSTEM_PATH "/cpu/present")) {
+        i = linuxParseCPUmax(SYSFS_SYSTEM_PATH "/cpu/present");
+    } else if (virFileExists(SYSFS_SYSTEM_PATH "/cpu/cpu0")) {
+        do {
+            i++;
+            VIR_FREE(cpupath);
+            if (virAsprintf(&cpupath, "%s/cpu/cpu%d",
+                            SYSFS_SYSTEM_PATH, i) < 0) {
+                virReportOOMError();
+                return -1;
+            }
+        } while (virFileExists(cpupath));
+    } else {
+        /* no cpu/cpu0: we give up */
+        virReportError(VIR_ERR_NO_SUPPORT, "%s",
+                       _("host cpu counting not supported on this node"));
+        return -1;
+    }
+
+    VIR_FREE(cpupath);
+    return i;
 #else
     virReportError(VIR_ERR_NO_SUPPORT, "%s",
                    _("host cpu counting not implemented on this platform"));
@@ -972,15 +1022,30 @@ nodeGetCPUBitmap(int *max_id ATTRIBUTE_UNUSED)
     virBitmapPtr cpumap;
     int present;
 
-    present = linuxParseCPUmax(SYSFS_SYSTEM_PATH "/cpu/present");
-    /* XXX should we also work on older kernels, like RHEL5, that lack
-     * cpu/present and cpu/online files?  Those kernels also lack cpu
-     * hotplugging, so it would be a matter of finding the largest
-     * cpu/cpuNN directory, and creating a map that size with all bits
-     * set.  */
+    present = nodeGetCPUCount();
     if (present < 0)
         return NULL;
-    cpumap = linuxParseCPUmap(present, SYSFS_SYSTEM_PATH "/cpu/online");
+
+    if (virFileExists(SYSFS_SYSTEM_PATH "/cpu/online")) {
+        cpumap = linuxParseCPUmap(present, SYSFS_SYSTEM_PATH "/cpu/online");
+    } else {
+        int i;
+
+        cpumap = virBitmapNew(present);
+        if (!cpumap) {
+            virReportOOMError();
+            return NULL;
+        }
+        for (i = 0; i < present; i++) {
+            int online = virNodeGetCpuValue(SYSFS_SYSTEM_PATH, i, "online", 1);
+            if (online < 0) {
+                virBitmapFree(cpumap);
+                return NULL;
+            }
+            if (online)
+                ignore_value(virBitmapSetBit(cpumap, i));
+        }
+    }
     if (max_id && cpumap)
         *max_id = present;
     return cpumap;
@@ -1161,7 +1226,7 @@ nodeGetMemoryParameters(virConnectPtr conn ATTRIBUTE_UNUSED,
     for (i = 0; i < *nparams && i < NODE_MEMORY_PARAMETERS_NUM; i++) {
         virTypedParameterPtr param = &params[i];
 
-        switch(i) {
+        switch (i) {
         case 0:
             if (nodeGetMemoryParameterValue("pages_to_scan",
                                             &pages_to_scan) < 0)

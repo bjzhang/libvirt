@@ -191,6 +191,8 @@ VIR_ENUM_IMPL(qemuCaps, QEMU_CAPS_LAST,
               "vnc",
 
               "drive-mirror", /* 115 */
+              "usb-redir.bootindex",
+              "usb-host.bootindex",
     );
 
 struct _qemuCaps {
@@ -805,9 +807,13 @@ error:
 }
 
 
-static int qemuDefaultConsoleType(const char *ostype ATTRIBUTE_UNUSED)
+static int qemuDefaultConsoleType(const char *ostype ATTRIBUTE_UNUSED,
+                                  const char *arch)
 {
-    return VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SERIAL;
+    if (STRPREFIX(arch, "s390"))
+        return VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_VIRTIO;
+    else
+        return VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SERIAL;
 }
 
 
@@ -825,7 +831,7 @@ virCapsPtr qemuCapsInit(qemuCapsCachePtr cache)
     };
 
     /* Really, this never fails - look at the man-page. */
-    uname (&utsname);
+    uname(&utsname);
 
     if ((caps = virCapabilitiesNew(utsname.machine,
                                    1, 1)) == NULL)
@@ -1321,6 +1327,11 @@ static struct qemuCapsStringFlags qemuCapsObjectPropsPixx4PM[] = {
 
 static struct qemuCapsStringFlags qemuCapsObjectPropsUsbRedir[] = {
     { "filter", QEMU_CAPS_USB_REDIR_FILTER },
+    { "bootindex", QEMU_CAPS_USB_REDIR_BOOTINDEX },
+};
+
+static struct qemuCapsStringFlags qemuCapsObjectPropsUsbHost[] = {
+    { "bootindex", QEMU_CAPS_USB_HOST_BOOTINDEX },
 };
 
 struct qemuCapsObjectTypeProps {
@@ -1346,6 +1357,8 @@ static struct qemuCapsObjectTypeProps qemuCapsObjectProps[] = {
       ARRAY_CARDINALITY(qemuCapsObjectPropsPixx4PM) },
     { "usb-redir", qemuCapsObjectPropsUsbRedir,
       ARRAY_CARDINALITY(qemuCapsObjectPropsUsbRedir) },
+    { "usb-host", qemuCapsObjectPropsUsbHost,
+      ARRAY_CARDINALITY(qemuCapsObjectPropsUsbHost) },
 };
 
 
@@ -1541,6 +1554,7 @@ qemuCapsExtractDeviceStr(const char *qemu,
                          "-device", "PIIX4_PM,?",
                          "-device", "usb-redir,?",
                          "-device", "ide-drive,?",
+                         "-device", "usb-host,?",
                          NULL);
     /* qemu -help goes to stdout, but qemu -device ? goes to stderr.  */
     virCommandSetErrorBuffer(cmd, &output);
@@ -1558,7 +1572,7 @@ cleanup:
 
 
 static void
-uname_normalize (struct utsname *ut)
+uname_normalize(struct utsname *ut)
 {
     uname(ut);
 

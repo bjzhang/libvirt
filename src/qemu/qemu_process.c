@@ -1902,15 +1902,13 @@ qemuPrepareCpumap(struct qemud_driver *driver,
                   virBitmapPtr nodemask)
 {
     int i, hostcpus, maxcpu = QEMUD_CPUMASK_LEN;
-    virNodeInfo nodeinfo;
     virBitmapPtr cpumap = NULL;
-
-    if (nodeGetInfo(NULL, &nodeinfo) < 0)
-        return NULL;
 
     /* setaffinity fails if you set bits for CPUs which
      * aren't present, so we have to limit ourselves */
-    hostcpus = VIR_NODEINFO_MAXCPUS(nodeinfo);
+    if ((hostcpus = nodeGetCPUCount()) < 0)
+        return NULL;
+
     if (maxcpu > hostcpus)
         maxcpu = hostcpus;
 
@@ -3025,23 +3023,27 @@ qemuProcessRecoverJob(struct qemud_driver *driver,
 
     case QEMU_ASYNC_JOB_SAVE:
     case QEMU_ASYNC_JOB_DUMP:
+    case QEMU_ASYNC_JOB_SNAPSHOT:
         qemuDomainObjEnterMonitor(driver, vm);
         ignore_value(qemuMonitorMigrateCancel(priv->mon));
         qemuDomainObjExitMonitor(driver, vm);
         /* resume the domain but only if it was paused as a result of
-         * running save/dump operation.  Although we are recovering an
-         * async job, this function is run at startup and must resume
-         * things using sync monitor connections.  */
-        if (state == VIR_DOMAIN_PAUSED &&
-            ((job->asyncJob == QEMU_ASYNC_JOB_DUMP &&
-              reason == VIR_DOMAIN_PAUSED_DUMP) ||
-             (job->asyncJob == QEMU_ASYNC_JOB_SAVE &&
-              reason == VIR_DOMAIN_PAUSED_SAVE) ||
-             reason == VIR_DOMAIN_PAUSED_UNKNOWN)) {
-            if (qemuProcessStartCPUs(driver, vm, conn,
-                                     VIR_DOMAIN_RUNNING_UNPAUSED,
-                                     QEMU_ASYNC_JOB_NONE) < 0) {
-                VIR_WARN("Could not resume domain %s after", vm->def->name);
+         * running a migration-to-file operation.  Although we are
+         * recovering an async job, this function is run at startup
+         * and must resume things using sync monitor connections.  */
+         if (state == VIR_DOMAIN_PAUSED &&
+             ((job->asyncJob == QEMU_ASYNC_JOB_DUMP &&
+               reason == VIR_DOMAIN_PAUSED_DUMP) ||
+              (job->asyncJob == QEMU_ASYNC_JOB_SAVE &&
+               reason == VIR_DOMAIN_PAUSED_SAVE) ||
+              (job->asyncJob == QEMU_ASYNC_JOB_SNAPSHOT &&
+               reason == VIR_DOMAIN_PAUSED_SNAPSHOT) ||
+              reason == VIR_DOMAIN_PAUSED_UNKNOWN)) {
+             if (qemuProcessStartCPUs(driver, vm, conn,
+                                      VIR_DOMAIN_RUNNING_UNPAUSED,
+                                      QEMU_ASYNC_JOB_NONE) < 0) {
+                 VIR_WARN("Could not resume domain '%s' after migration to file",
+                          vm->def->name);
             }
         }
         break;
@@ -3225,9 +3227,6 @@ qemuProcessReconnect(void *opaque)
         if (hookret < 0)
             goto error;
     }
-
-    if (obj->def->id >= driver->nextvmid)
-        driver->nextvmid = obj->def->id + 1;
 
 endjob:
     if (!qemuDomainObjEndJob(driver, obj))
