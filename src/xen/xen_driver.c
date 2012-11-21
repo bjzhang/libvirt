@@ -1102,6 +1102,7 @@ xenUnifiedDomainManagedSavePath(xenUnifiedPrivatePtr priv, virDomainPtr dom) {
         return NULL;
     }
 
+    VIR_DEBUG("got managedSave path: %s", ret);
     return ret;
 }
 
@@ -1148,7 +1149,6 @@ xenUnifiedDomainManagedSave(virDomainPtr dom, unsigned int flags)
 
 cleanup:
     VIR_FREE(name);
-
     return ret;
 }
 
@@ -1627,15 +1627,20 @@ xenUnifiedDomainCreateWithFlags(virDomainPtr dom, unsigned int flags)
     GET_PRIVATE(dom->conn);
     char *name;
     int i;
+    int ret = -1;
 
     virCheckFlags(0, -1);
 
-    if ( priv->hasManagedSave ) {
-        name = xenUnifiedDomainManagedSavePath(priv, dom);
+    name = xenUnifiedDomainManagedSavePath(priv, dom);
+    if ( name ) {
         priv->hasManagedSave = false;
         if (priv->opened[XEN_UNIFIED_XEND_OFFSET])
-            return xenDaemonDomainRestore(dom->conn, name);
-        return -1;
+            VIR_DEBUG("restore from managedSave");
+            ret = xenDaemonDomainRestore(dom->conn, name);
+            if (unlink(name) < 0) {
+                VIR_WARN("Failed to remove the managed state %s", name);
+            }
+        goto cleanup;
     }
 
     for (i = 0; i < XEN_UNIFIED_NR_DRIVERS; ++i)
@@ -1644,6 +1649,9 @@ xenUnifiedDomainCreateWithFlags(virDomainPtr dom, unsigned int flags)
             return 0;
 
     return -1;
+cleanup:
+    VIR_FREE(name);
+    return ret;
 }
 
 static int
