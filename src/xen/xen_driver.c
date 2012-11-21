@@ -1094,10 +1094,10 @@ xenUnifiedDomainSave(virDomainPtr dom, const char *to)
 }
 
 static char *
-xenUnifiedDomainManagedSavePath(struct xenUnifiedPrivatePtr driver, virDomainObjPtr vm) {
+xenUnifiedDomainManagedSavePath(xenUnifiedPrivatePtr priv, virDomainPtr dom) {
     char *ret;
 
-    if (virAsprintf(&ret, "%s/%s.save", driver->saveDir, vm->def->name) < 0) {
+    if (virAsprintf(&ret, "%s/%s.save", priv->saveDir, dom->name) < 0) {
         virReportOOMError();
         return NULL;
     }
@@ -1109,134 +1109,95 @@ static int
 xenUnifiedDomainManagedSave(virDomainPtr dom, unsigned int flags)
 {
     GET_PRIVATE(dom->conn);
-    virDomainObjPtr vm = NULL;
     char *name = NULL;
     int ret = -1;
-    int compressed;
 
     virCheckFlags(VIR_DOMAIN_SAVE_BYPASS_CACHE |
                   VIR_DOMAIN_SAVE_RUNNING |
                   VIR_DOMAIN_SAVE_PAUSED, -1);
 
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
-    if (!vm) {
-        char uuidstr[VIR_UUID_STRING_BUFLEN];
-        virUUIDFormat(dom->uuid, uuidstr);
-        virReportError(VIR_ERR_NO_DOMAIN,
-                       _("no domain with matching uuid '%s'"), uuidstr);
-        goto cleanup;
-    }
+//    vm = xenUnifiedDomainLookupByUUID(dom->conn, dom->uuid);
+//    if (!vm) {
+//        goto cleanup;
+//    }
+//
+//    if (!virDomainObjIsActive(vm)) {
+//        virReportError(VIR_ERR_OPERATION_INVALID,
+//                       "%s", _("domain is not running"));
+//        goto cleanup;
+//    }
+//    if (!vm->persistent) {
+//        virReportError(VIR_ERR_OPERATION_INVALID, "%s",
+//                       _("cannot do managed save for transient domain"));
+//        goto cleanup;
+//    }
 
-    if (!virDomainObjIsActive(vm)) {
-        virReportError(VIR_ERR_OPERATION_INVALID,
-                       "%s", _("domain is not running"));
-        goto cleanup;
-    }
-    if (!vm->persistent) {
-        virReportError(VIR_ERR_OPERATION_INVALID, "%s",
-                       _("cannot do managed save for transient domain"));
-        goto cleanup;
-    }
-
-    name = xenUnifiedDomainManagedSavePath(driver, vm);
+    name = xenUnifiedDomainManagedSavePath(priv, dom);
     if (name == NULL)
         goto cleanup;
 
     VIR_INFO("Saving state to %s", name);
 
     if (priv->opened[XEN_UNIFIED_XEND_OFFSET])
-        ret = xenDaemonDomainSave(dom, to);
+        ret = xenDaemonDomainSave(dom, name);
         if (ret == 0) {
-            vm->hasManagedSave = true;
+            priv->hasManagedSave = true;
         }
     else
         ret = -1;
 
 cleanup:
-    if (vm)
-        virDomainObjUnlock(vm);
     VIR_FREE(name);
 
     return ret;
 }
 
-static void
-xenUnifiedDomainManagedSaveLoad(void *payload,
-                                const void *n ATTRIBUTE_UNUSED,
-                                void *opaque)
-{
-    virDomainObjPtr vm = payload;
-    xenUnifiedPrivatePtr driver = opaque;
-    char *name;
-
-    virDomainObjLock(vm);
-
-    if (!(name = xenUnifiedDomainManagedSavePath(driver, vm)))
-        goto cleanup;
-
-    vm->hasManagedSave = virFileExists(name);
-
-cleanup:
-    virDomainObjUnlock(vm);
-    VIR_FREE(name);
-}
+//static void
+//xenUnifiedDomainManagedSaveLoad(void *payload,
+//                                const void *n ATTRIBUTE_UNUSED,
+//                                void *opaque)
+//{
+//    virDomainPtr dom = payload;
+//    xenUnifiedPrivatePtr priv = opaque;
+//    char *name;
+//
+//    if (!(name = xenUnifiedDomainManagedSavePath(priv, dom)))
+//        goto cleanup;
+//
+//    priv->hasManagedSave = virFileExists(name);
+//
+//    VIR_FREE(name);
+//cleanup:
+//    return;
+//}
 
 static int
 xenUnifiedDomainHasManagedSaveImage(virDomainPtr dom, unsigned int flags)
 {
     GET_PRIVATE(dom->conn);
-    virDomainObjPtr vm = NULL;
-    int ret = -1;
 
     virCheckFlags(0, -1);
-
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
-    if (!vm) {
-        char uuidstr[VIR_UUID_STRING_BUFLEN];
-        virUUIDFormat(dom->uuid, uuidstr);
-        virReportError(VIR_ERR_NO_DOMAIN,
-                       _("no domain with matching uuid '%s'"), uuidstr);
-        goto cleanup;
-    }
-
-    ret = vm->hasManagedSave;
-
-cleanup:
-    if (vm)
-        virDomainObjUnlock(vm);
-    return ret;
+    return priv->hasManagedSave;
 }
 
 static int
 xenUnifiedDomainManagedSaveRemove(virDomainPtr dom, unsigned int flags)
 {
     GET_PRIVATE(dom->conn);
-    virDomainObjPtr vm = NULL;
     int ret = -1;
-    char *name = NULL;
+    char *name;
 
     virCheckFlags(0, -1);
 
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
-    if (!vm) {
-        char uuidstr[VIR_UUID_STRING_BUFLEN];
-        virUUIDFormat(dom->uuid, uuidstr);
-        virReportError(VIR_ERR_NO_DOMAIN,
-                       _("no domain with matching uuid '%s'"), uuidstr);
-        goto cleanup;
-    }
-
-    name = xenUnifiedDomainManagedSavePath(driver, vm);
+    name = xenUnifiedDomainManagedSavePath(priv, dom);
     if (name == NULL)
         goto cleanup;
 
     ret = unlink(name);
-    vm->hasManagedSave = false;
+    priv->hasManagedSave = false;
 
 cleanup:
     VIR_FREE(name);
-    if (vm)
-        virDomainObjUnlock(vm);
     return ret;
 }
 
@@ -1664,24 +1625,16 @@ static int
 xenUnifiedDomainCreateWithFlags(virDomainPtr dom, unsigned int flags)
 {
     GET_PRIVATE(dom->conn);
+    char *name;
     int i;
 
     virCheckFlags(0, -1);
 
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
-    if (!vm) {
-        char uuidstr[VIR_UUID_STRING_BUFLEN];
-        virUUIDFormat(dom->uuid, uuidstr);
-        virReportError(VIR_ERR_NO_DOMAIN,
-                       _("no domain with matching uuid '%s'"), uuidstr);
-        return -1;
-    }
-
-    if ( vm->hasManagedSave ) {
-        xenUnifiedDomainManagedSavePath(priv, virDomainObjPtr vm) {
-        vm->hasManagedSave = false;
+    if ( priv->hasManagedSave ) {
+        name = xenUnifiedDomainManagedSavePath(priv, dom);
+        priv->hasManagedSave = false;
         if (priv->opened[XEN_UNIFIED_XEND_OFFSET])
-            return xenDaemonDomainRestore(conn, from);
+            return xenDaemonDomainRestore(dom->conn, name);
         return -1;
     }
 
