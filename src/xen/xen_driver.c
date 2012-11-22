@@ -67,6 +67,7 @@
 #include "nodeinfo.h"
 
 #define VIR_FROM_THIS VIR_FROM_XEN
+#define XEN_DOMAINS_DIR "/var/lib/xen/save"
 
 static int
 xenUnifiedNodeGetInfo(virConnectPtr conn, virNodeInfoPtr info);
@@ -407,13 +408,12 @@ xenUnifiedOpen(virConnectPtr conn, virConnectAuthPtr auth, unsigned int flags)
     }
 #endif
 
-    if (virAsprintf(&priv->saveDir,
-                    "%s", "/var/lib/xen/save") == -1)
+    if (virAsprintf(&priv->saveDir, "%s", XEN_DOMAINS_DIR) == -1)
         goto out_of_memory;
 
     if (virFileMakePath(priv->saveDir) < 0) {
-        VIR_ERROR(_("Failed to create save dir '%s': %s"),
-                  priv->saveDir, virStrerror(errno, ebuf, sizeof(ebuf)));
+        VIR_ERROR(_("Failed to create save dir '%s': %s"), priv->saveDir,
+                  virStrerror(errno, ebuf, sizeof(ebuf)));
         goto fail;
     }
 
@@ -450,6 +450,7 @@ xenUnifiedClose(virConnectPtr conn)
         if (priv->opened[i])
             drivers[i]->xenClose(conn);
 
+    VIR_FREE(libxl_driver->saveDir);
     virMutexDestroy(&priv->lock);
     VIR_FREE(conn->privateData);
 
@@ -1117,22 +1118,6 @@ xenUnifiedDomainManagedSave(virDomainPtr dom, unsigned int flags)
                   VIR_DOMAIN_SAVE_RUNNING |
                   VIR_DOMAIN_SAVE_PAUSED, -1);
 
-//    vm = xenUnifiedDomainLookupByUUID(dom->conn, dom->uuid);
-//    if (!vm) {
-//        goto cleanup;
-//    }
-//
-//    if (!virDomainObjIsActive(vm)) {
-//        virReportError(VIR_ERR_OPERATION_INVALID,
-//                       "%s", _("domain is not running"));
-//        goto cleanup;
-//    }
-//    if (!vm->persistent) {
-//        virReportError(VIR_ERR_OPERATION_INVALID, "%s",
-//                       _("cannot do managed save for transient domain"));
-//        goto cleanup;
-//    }
-
     name = xenUnifiedDomainManagedSavePath(priv, dom);
     if (name == NULL)
         goto cleanup;
@@ -1633,13 +1618,14 @@ xenUnifiedDomainCreateWithFlags(virDomainPtr dom, unsigned int flags)
 
     name = xenUnifiedDomainManagedSavePath(priv, dom);
     if ( name ) {
-        priv->hasManagedSave = false;
         if (priv->opened[XEN_UNIFIED_XEND_OFFSET])
             VIR_DEBUG("restore from managedSave");
             ret = xenDaemonDomainRestore(dom->conn, name);
             if (unlink(name) < 0) {
                 VIR_WARN("Failed to remove the managed state %s", name);
             }
+
+        priv->hasManagedSave = false;
         goto cleanup;
     }
 
