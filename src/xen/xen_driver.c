@@ -1137,25 +1137,6 @@ cleanup:
     return ret;
 }
 
-//static void
-//xenUnifiedDomainManagedSaveLoad(void *payload,
-//                                const void *n ATTRIBUTE_UNUSED,
-//                                void *opaque)
-//{
-//    virDomainPtr dom = payload;
-//    xenUnifiedPrivatePtr priv = opaque;
-//    char *name;
-//
-//    if (!(name = xenUnifiedDomainManagedSavePath(priv, dom)))
-//        goto cleanup;
-//
-//    priv->hasManagedSave = virFileExists(name);
-//
-//    VIR_FREE(name);
-//cleanup:
-//    return;
-//}
-
 static int
 xenUnifiedDomainHasManagedSaveImage(virDomainPtr dom, unsigned int flags)
 {
