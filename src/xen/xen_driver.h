@@ -200,6 +200,8 @@ struct _xenUnifiedPrivate {
     /* Location of config files, either /etc
      * or /var/lib/xen */
     const char *configDir;
+    /* Location of managed save dir, default /var/lib/xen/save */
+    char *saveDir;
 
 # if WITH_XEN_INOTIFY
     /* The inotify fd */
@@ -217,6 +219,9 @@ struct _xenUnifiedPrivate {
     virHashTablePtr nameConfigMap;
     /* So we don't refresh too often */
     time_t lastRefresh;
+
+    /* For managed save */
+    bool hasManagedSave;
 };
 
 typedef struct _xenUnifiedPrivate *xenUnifiedPrivatePtr;

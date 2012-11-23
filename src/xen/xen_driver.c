@@ -67,6 +67,7 @@
 #include "nodeinfo.h"
 
 #define VIR_FROM_THIS VIR_FROM_XEN
+#define XEN_DOMAINS_DIR "/var/lib/xen/save"
 
 static int
 xenUnifiedNodeGetInfo(virConnectPtr conn, virNodeInfoPtr info);
@@ -267,6 +268,7 @@ xenUnifiedOpen(virConnectPtr conn, virConnectAuthPtr auth, unsigned int flags)
 {
     int i, ret = VIR_DRV_OPEN_DECLINED;
     xenUnifiedPrivatePtr priv;
+    char ebuf[1024];
 
 #ifdef __sun
     /*
@@ -406,8 +408,19 @@ xenUnifiedOpen(virConnectPtr conn, virConnectAuthPtr auth, unsigned int flags)
     }
 #endif
 
+    if (virAsprintf(&priv->saveDir, "%s", XEN_DOMAINS_DIR) == -1)
+        goto out_of_memory;
+
+    if (virFileMakePath(priv->saveDir) < 0) {
+        VIR_ERROR(_("Failed to create save dir '%s': %s"), priv->saveDir,
+                  virStrerror(errno, ebuf, sizeof(ebuf)));
+        goto fail;
+    }
+
     return VIR_DRV_OPEN_SUCCESS;
 
+out_of_memory:
+    virReportOOMError();
 fail:
     ret = VIR_DRV_OPEN_ERROR;
 clean:
@@ -437,6 +450,7 @@ xenUnifiedClose(virConnectPtr conn)
         if (priv->opened[i])
             drivers[i]->xenClose(conn);
 
+    VIR_FREE(libxl_driver->saveDir);
     virMutexDestroy(&priv->lock);
     VIR_FREE(conn->privateData);
 
@@ -1080,6 +1094,79 @@ xenUnifiedDomainSave(virDomainPtr dom, const char *to)
     return xenUnifiedDomainSaveFlags(dom, to, NULL, 0);
 }
 
+static char *
+xenUnifiedDomainManagedSavePath(xenUnifiedPrivatePtr priv, virDomainPtr dom) {
+    char *ret;
+
+    if (virAsprintf(&ret, "%s/%s.save", priv->saveDir, dom->name) < 0) {
+        virReportOOMError();
+        return NULL;
+    }
+
+    VIR_DEBUG("got managedSave path: %s", ret);
+    return ret;
+}
+
+static int
+xenUnifiedDomainManagedSave(virDomainPtr dom, unsigned int flags)
+{
+    GET_PRIVATE(dom->conn);
+    char *name = NULL;
+    int ret = -1;
+
+    virCheckFlags(VIR_DOMAIN_SAVE_BYPASS_CACHE |
+                  VIR_DOMAIN_SAVE_RUNNING |
+                  VIR_DOMAIN_SAVE_PAUSED, -1);
+
+    name = xenUnifiedDomainManagedSavePath(priv, dom);
+    if (name == NULL)
+        goto cleanup;
+
+    VIR_INFO("Saving state to %s", name);
+
+    if (priv->opened[XEN_UNIFIED_XEND_OFFSET])
+        ret = xenDaemonDomainSave(dom, name);
+        if (ret == 0) {
+            priv->hasManagedSave = true;
+        }
+    else
+        ret = -1;
+
+cleanup:
+    VIR_FREE(name);
+    return ret;
+}
+
+static int
+xenUnifiedDomainHasManagedSaveImage(virDomainPtr dom, unsigned int flags)
+{
+    GET_PRIVATE(dom->conn);
+
+    virCheckFlags(0, -1);
+    return priv->hasManagedSave;
+}
+
+static int
+xenUnifiedDomainManagedSaveRemove(virDomainPtr dom, unsigned int flags)
+{
+    GET_PRIVATE(dom->conn);
+    int ret = -1;
+    char *name;
+
+    virCheckFlags(0, -1);
+
+    name = xenUnifiedDomainManagedSavePath(priv, dom);
+    if (name == NULL)
+        goto cleanup;
+
+    ret = unlink(name);
+    priv->hasManagedSave = false;
+
+cleanup:
+    VIR_FREE(name);
+    return ret;
+}
+
 static int
 xenUnifiedDomainRestoreFlags(virConnectPtr conn, const char *from,
                              const char *dxml, unsigned int flags)
@@ -1504,9 +1591,24 @@ static int
 xenUnifiedDomainCreateWithFlags(virDomainPtr dom, unsigned int flags)
 {
     GET_PRIVATE(dom->conn);
+    char *name;
     int i;
+    int ret = -1;
 
     virCheckFlags(0, -1);
+
+    name = xenUnifiedDomainManagedSavePath(priv, dom);
+    if ( name ) {
+        if (priv->opened[XEN_UNIFIED_XEND_OFFSET])
+            VIR_DEBUG("restore from managedSave");
+            ret = xenDaemonDomainRestore(dom->conn, name);
+            if (unlink(name) < 0) {
+                VIR_WARN("Failed to remove the managed state %s", name);
+            }
+
+        priv->hasManagedSave = false;
+        goto cleanup;
+    }
 
     for (i = 0; i < XEN_UNIFIED_NR_DRIVERS; ++i)
         if (priv->opened[i] && drivers[i]->xenDomainCreate &&
@@ -1514,6 +1616,9 @@ xenUnifiedDomainCreateWithFlags(virDomainPtr dom, unsigned int flags)
             return 0;
 
     return -1;
+cleanup:
+    VIR_FREE(name);
+    return ret;
 }
 
 static int
@@ -2218,6 +2323,9 @@ static virDriver xenUnifiedDriver = {
     .domainGetState = xenUnifiedDomainGetState, /* 0.9.2 */
     .domainSave = xenUnifiedDomainSave, /* 0.0.3 */
     .domainSaveFlags = xenUnifiedDomainSaveFlags, /* 0.9.4 */
+    .domainManagedSave = xenUnifiedDomainManagedSave, /* 1.0.2 */
+    .domainHasManagedSaveImage = xenUnifiedDomainHasManagedSaveImage, /* 1.0.2 */
+    .domainManagedSaveRemove = xenUnifiedDomainManagedSaveRemove, /* 1.0.2 */
     .domainRestore = xenUnifiedDomainRestore, /* 0.0.3 */
     .domainRestoreFlags = xenUnifiedDomainRestoreFlags, /* 0.9.4 */
     .domainCoreDump = xenUnifiedDomainCoreDump, /* 0.1.9 */
