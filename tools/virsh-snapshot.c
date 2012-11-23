@@ -39,6 +39,7 @@
 #include "util.h"
 #include "virsh-domain.h"
 #include "xml.h"
+#include "conf/snapshot_conf.h"
 
 /* Helper for snapshot-create and snapshot-create-as */
 static bool
@@ -712,6 +713,63 @@ cleanup:
     return ret;
 }
 
+/* Helper function to filter snapshots according to status and
+ * location portion of flags.  Returns 0 if filter excluded snapshot,
+ * 1 if snapshot is okay (or if snapshot is already NULL), and -1 on
+ * failure, with error already reported.  */
+static int
+vshSnapshotFilter(vshControl *ctl, virDomainSnapshotPtr snapshot,
+                  unsigned int flags)
+{
+    char *xml = NULL;
+    xmlDocPtr xmldoc = NULL;
+    xmlXPathContextPtr ctxt = NULL;
+    int ret = -1;
+    char *state = NULL;
+
+    if (!snapshot)
+        return 1;
+
+    xml = virDomainSnapshotGetXMLDesc(snapshot, 0);
+    if (!xml)
+        goto cleanup;
+
+    xmldoc = virXMLParseStringCtxt(xml, _("(domain_snapshot)"), &ctxt);
+    if (!xmldoc)
+        goto cleanup;
+
+    /* Libvirt 1.0.1 and newer never call this function, because the
+     * filtering is already supported by the listing functions.  Older
+     * libvirt lacked /domainsnapshot/memory, but was also limited in
+     * the types of snapshots it could create: if state was disk-only,
+     * the snapshot is external; all other snapshots are internal.  */
+    state = virXPathString("string(/domainsnapshot/state)", ctxt);
+    if (!state) {
+        vshError(ctl, "%s", _("unable to perform snapshot filtering"));
+        goto cleanup;
+    }
+    if (STREQ(state, "disk-snapshot")) {
+        ret = ((flags & (VIR_DOMAIN_SNAPSHOT_LIST_DISK_ONLY |
+                         VIR_DOMAIN_SNAPSHOT_LIST_EXTERNAL)) ==
+               (VIR_DOMAIN_SNAPSHOT_LIST_DISK_ONLY |
+                VIR_DOMAIN_SNAPSHOT_LIST_EXTERNAL));
+    } else {
+        if (!(flags & VIR_DOMAIN_SNAPSHOT_LIST_INTERNAL))
+            ret = 0;
+        else if (STREQ(state, "shutoff"))
+            ret = !!(flags & VIR_DOMAIN_SNAPSHOT_LIST_INACTIVE);
+        else
+            ret = !!(flags & VIR_DOMAIN_SNAPSHOT_LIST_ACTIVE);
+    }
+
+cleanup:
+    VIR_FREE(state);
+    xmlXPathFreeContext(ctxt);
+    xmlFreeDoc(xmldoc);
+    VIR_FREE(xml);
+    return ret;
+}
+
 /*
  * "snapshot-info" command
  */
@@ -735,7 +793,10 @@ cmdSnapshotInfo(vshControl *ctl, const vshCmd *cmd)
     virDomainSnapshotPtr snapshot = NULL;
     const char *name;
     char *doc = NULL;
-    char *tmp;
+    xmlDocPtr xmldoc = NULL;
+    xmlXPathContextPtr ctxt = NULL;
+    char *state = NULL;
+    int external;
     char *parent = NULL;
     bool ret = false;
     int count;
@@ -777,18 +838,48 @@ cmdSnapshotInfo(vshControl *ctl, const vshCmd *cmd)
     if (!doc)
         goto cleanup;
 
-    tmp = strstr(doc, "<state>");
-    if (!tmp) {
+    xmldoc = virXMLParseStringCtxt(doc, _("(domain_snapshot)"), &ctxt);
+    if (!xmldoc)
+        goto cleanup;
+
+    state = virXPathString("string(/domainsnapshot/state)", ctxt);
+    if (!state) {
         vshError(ctl, "%s",
                  _("unexpected problem reading snapshot xml"));
         goto cleanup;
     }
-    tmp += strlen("<state>");
-    vshPrint(ctl, "%-15s %.*s\n", _("State:"),
-             (int) (strchr(tmp, '<') - tmp), tmp);
+    vshPrint(ctl, "%-15s %s\n", _("State:"), state);
 
-    if (vshGetSnapshotParent(ctl, snapshot, &parent) < 0)
+    /* In addition to state, location is useful.  If the snapshot has
+     * a <memory> element, then the existence of snapshot='external'
+     * prior to <domain> is the deciding factor; for snapshots
+     * created prior to 1.0.1, a state of disk-only is the only
+     * external snapshot.  */
+    switch (virXPathBoolean("boolean(/domainsnapshot/memory)", ctxt)) {
+    case 1:
+        external = virXPathBoolean("boolean(/domainsnapshot/memory/@snapshot=external "
+                                   "| /domainsnapshot/disks/disk/@snapshot=external)",
+                                   ctxt);
+        break;
+    case 0:
+        external = STREQ(state, "disk-snapshot");
+        break;
+    default:
+        external = -1;
+        break;
+
+    }
+    if (external < 0) {
+        vshError(ctl, "%s",
+                 _("unexpected problem reading snapshot xml"));
         goto cleanup;
+    }
+    vshPrint(ctl, "%-15s %s\n", _("Location:"),
+             external ? _("external") : _("internal"));
+
+    /* Since we already have the XML, there's no need to call
+     * virDomainSnapshotGetParent */
+    parent = virXPathString("string(/domainsnapshot/parent/name)", ctxt);
     vshPrint(ctl, "%-15s %s\n", _("Parent:"), parent ? parent : "-");
 
     /* Children, Descendants.  After this point, the fallback to
@@ -800,8 +891,13 @@ cmdSnapshotInfo(vshControl *ctl, const vshCmd *cmd)
     }
     flags = 0;
     count = virDomainSnapshotNumChildren(snapshot, flags);
-    if (count < 0)
+    if (count < 0) {
+        if (last_error->code == VIR_ERR_NO_SUPPORT) {
+            vshResetLibvirtError();
+            ret = true;
+        }
         goto cleanup;
+    }
     vshPrint(ctl, "%-15s %d\n", _("Children:"), count);
     flags = VIR_DOMAIN_SNAPSHOT_LIST_DESCENDANTS;
     count = virDomainSnapshotNumChildren(snapshot, flags);
@@ -824,6 +920,9 @@ cmdSnapshotInfo(vshControl *ctl, const vshCmd *cmd)
     ret = true;
 
 cleanup:
+    VIR_FREE(state);
+    xmlXPathFreeContext(ctxt);
+    xmlFreeDoc(xmldoc);
     VIR_FREE(doc);
     VIR_FREE(parent);
     if (snapshot)
@@ -883,7 +982,7 @@ vshSnapSorter(const void *a, const void *b)
 static vshSnapshotListPtr
 vshSnapshotListCollect(vshControl *ctl, virDomainPtr dom,
                        virDomainSnapshotPtr from,
-                       unsigned int flags, bool tree)
+                       unsigned int orig_flags, bool tree)
 {
     int i;
     char **names = NULL;
@@ -896,6 +995,8 @@ vshSnapshotListCollect(vshControl *ctl, virDomainPtr dom,
     const char *fromname = NULL;
     int start_index = -1;
     int deleted = 0;
+    bool filter_fallback = false;
+    unsigned int flags = orig_flags;
 
     /* Try the interface available in 0.9.13 and newer.  */
     if (!ctl->useSnapshotOld) {
@@ -903,6 +1004,20 @@ vshSnapshotListCollect(vshControl *ctl, virDomainPtr dom,
             count = virDomainSnapshotListAllChildren(from, &snaps, flags);
         else
             count = virDomainListAllSnapshots(dom, &snaps, flags);
+        /* If we failed because of flags added in 1.0.1, we can do
+         * fallback filtering. */
+        if  (count < 0 && last_error->code == VIR_ERR_INVALID_ARG &&
+             flags & (VIR_DOMAIN_SNAPSHOT_FILTERS_STATUS |
+                      VIR_DOMAIN_SNAPSHOT_FILTERS_LOCATION)) {
+            flags &= ~(VIR_DOMAIN_SNAPSHOT_FILTERS_STATUS |
+                       VIR_DOMAIN_SNAPSHOT_FILTERS_LOCATION);
+            vshResetLibvirtError();
+            filter_fallback = true;
+            if (from)
+                count = virDomainSnapshotListAllChildren(from, &snaps, flags);
+            else
+                count = virDomainListAllSnapshots(dom, &snaps, flags);
+        }
     }
     if (count >= 0) {
         /* When mixing --from and --tree, we also want a copy of from
@@ -949,6 +1064,12 @@ vshSnapshotListCollect(vshControl *ctl, virDomainPtr dom,
         if (count > 0)
             return snaplist;
         flags &= ~VIR_DOMAIN_SNAPSHOT_LIST_NO_METADATA;
+    }
+    if (flags & (VIR_DOMAIN_SNAPSHOT_FILTERS_STATUS |
+                 VIR_DOMAIN_SNAPSHOT_FILTERS_LOCATION)) {
+        flags &= ~(VIR_DOMAIN_SNAPSHOT_FILTERS_STATUS |
+                   VIR_DOMAIN_SNAPSHOT_FILTERS_LOCATION);
+        filter_fallback = true;
     }
 
     /* This uses the interfaces available in 0.8.0-0.9.6
@@ -1144,6 +1265,29 @@ vshSnapshotListCollect(vshControl *ctl, virDomainPtr dom,
     }
 
 success:
+    if (filter_fallback) {
+        /* Older API didn't filter on status or location, but the
+         * information is available in domain XML.  */
+        if (!(orig_flags & VIR_DOMAIN_SNAPSHOT_FILTERS_STATUS))
+            orig_flags |= VIR_DOMAIN_SNAPSHOT_FILTERS_STATUS;
+        if (!(orig_flags & VIR_DOMAIN_SNAPSHOT_FILTERS_LOCATION))
+            orig_flags |= VIR_DOMAIN_SNAPSHOT_FILTERS_LOCATION;
+        for (i = 0; i < snaplist->nsnaps; i++) {
+            switch (vshSnapshotFilter(ctl, snaplist->snaps[i].snap,
+                                      orig_flags)) {
+            case 1:
+                break;
+            case 0:
+                virDomainSnapshotFree(snaplist->snaps[i].snap);
+                snaplist->snaps[i].snap = NULL;
+                VIR_FREE(snaplist->snaps[i].parent);
+                deleted++;
+                break;
+            default:
+                goto cleanup;
+            }
+        }
+    }
     qsort(snaplist->snaps, snaplist->nsnaps, sizeof(*snaplist->snaps),
           vshSnapSorter);
     snaplist->nsnaps -= deleted;
@@ -1189,6 +1333,13 @@ static const vshCmdOptDef opts_snapshot_list[] = {
      N_("list only snapshots that have metadata that would prevent undefine")},
     {"no-metadata", VSH_OT_BOOL, 0,
      N_("list only snapshots that have no metadata managed by libvirt")},
+    {"inactive", VSH_OT_BOOL, 0,
+     N_("filter by snapshots taken while inactive")},
+    {"active", VSH_OT_BOOL, 0,
+     N_("filter by snapshots taken while active (system checkpoints)")},
+    {"disk-only", VSH_OT_BOOL, 0, N_("filter by disk-only snapshots")},
+    {"internal", VSH_OT_BOOL, 0, N_("filter by internal snapshots")},
+    {"external", VSH_OT_BOOL, 0, N_("filter by external snapshots")},
     {"tree", VSH_OT_BOOL, 0, N_("list snapshots in a tree")},
     {"from", VSH_OT_DATA, 0, N_("limit list to children of given snapshot")},
     {"current", VSH_OT_BOOL, 0,
@@ -1216,8 +1367,6 @@ cmdSnapshotList(vshControl *ctl, const vshCmd *cmd)
     char timestr[100];
     struct tm time_info;
     bool tree = vshCommandOptBool(cmd, "tree");
-    bool leaves = vshCommandOptBool(cmd, "leaves");
-    bool no_leaves = vshCommandOptBool(cmd, "no-leaves");
     const char *from = NULL;
     virDomainSnapshotPtr start = NULL;
     vshSnapshotListPtr snaplist = NULL;
@@ -1258,22 +1407,27 @@ cmdSnapshotList(vshControl *ctl, const vshCmd *cmd)
         }
         flags |= VIR_DOMAIN_SNAPSHOT_LIST_ROOTS;
     }
-    if (leaves) {
-        if (tree) {
-            vshError(ctl, "%s",
-                     _("--leaves and --tree are mutually exclusive"));
-            goto cleanup;
-        }
-        flags |= VIR_DOMAIN_SNAPSHOT_LIST_LEAVES;
-    }
-    if (no_leaves) {
-        if (tree) {
-            vshError(ctl, "%s",
-                     _("--no-leaves and --tree are mutually exclusive"));
-            goto cleanup;
-        }
-        flags |= VIR_DOMAIN_SNAPSHOT_LIST_NO_LEAVES;
-    }
+#define FILTER(option, flag)                                          \
+    do {                                                              \
+        if (vshCommandOptBool(cmd, option)) {                         \
+            if (tree) {                                               \
+                vshError(ctl,                                         \
+                         _("--%s and --tree are mutually exclusive"), \
+                         option);                                     \
+                goto cleanup;                                         \
+            }                                                         \
+            flags |= VIR_DOMAIN_SNAPSHOT_LIST_ ## flag;               \
+        }                                                             \
+    } while (0)
+
+    FILTER("leaves", LEAVES);
+    FILTER("no-leaves", NO_LEAVES);
+    FILTER("inactive", INACTIVE);
+    FILTER("active", ACTIVE);
+    FILTER("disk-only", DISK_ONLY);
+    FILTER("internal", INTERNAL);
+    FILTER("external", EXTERNAL);
+#undef FILTER
 
     if (vshCommandOptBool(cmd, "metadata")) {
         flags |= VIR_DOMAIN_SNAPSHOT_LIST_METADATA;
