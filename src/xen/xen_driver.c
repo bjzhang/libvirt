@@ -1127,8 +1127,10 @@ xenUnifiedDomainManagedSave(virDomainPtr dom, unsigned int flags)
     if (priv->opened[XEN_UNIFIED_XEND_OFFSET])
         ret = xenDaemonDomainSave(dom, name);
         if (ret == 0) {
+            VIR_INFO("set hasManagedSave");
             priv->hasManagedSave = true;
         }
+        VIR_INFO("ret: %d", ret);
     else
         ret = -1;
 
