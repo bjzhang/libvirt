@@ -449,6 +449,7 @@ static int
 virStorageBackendFileSystemUnmount(virStoragePoolObjPtr pool) {
     virCommandPtr cmd = NULL;
     int ret = -1;
+    int rc;
 
     if (pool->def->type == VIR_STORAGE_POOL_NETFS) {
         if (pool->def->source.nhost != 1) {
@@ -475,12 +476,8 @@ virStorageBackendFileSystemUnmount(virStoragePoolObjPtr pool) {
     }
 
     /* Short-circuit if already unmounted */
-    if ((ret = virStorageBackendFileSystemIsMounted(pool)) != 1) {
-        if (ret < 0)
-            return -1;
-        else
-            return 0;
-    }
+    if ((rc = virStorageBackendFileSystemIsMounted(pool)) != 1)
+        return rc;
 
     cmd = virCommandNewArgList(UMOUNT,
                                pool->def->target.path,
@@ -933,7 +930,7 @@ no_memory:
  * @conn connection to report errors against
  * @pool storage pool to start
  *
- * Stops a directory or FS based storage pool.
+ * Stops a FS based storage pool.
  *
  *  - If it is a FS based pool, unmounts the unlying source device on the pool
  *  - Releases all cached data about volumes
@@ -943,8 +940,7 @@ static int
 virStorageBackendFileSystemStop(virConnectPtr conn ATTRIBUTE_UNUSED,
                                 virStoragePoolObjPtr pool)
 {
-    if (pool->def->type != VIR_STORAGE_POOL_DIR &&
-        virStorageBackendFileSystemUnmount(pool) < 0)
+    if (virStorageBackendFileSystemUnmount(pool) < 0)
         return -1;
 
     return 0;

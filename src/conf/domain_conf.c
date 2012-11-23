@@ -1861,8 +1861,6 @@ virDomainObjSetDefTransient(virCapsPtr caps,
                             bool live)
 {
     int ret = -1;
-    char *xml = NULL;
-    virDomainDefPtr newDef = NULL;
 
     if (!virDomainObjIsActive(domain) && !live)
         return 0;
@@ -1873,17 +1871,11 @@ virDomainObjSetDefTransient(virCapsPtr caps,
     if (domain->newDef)
         return 0;
 
-    if (!(xml = virDomainDefFormat(domain->def, VIR_DOMAIN_XML_WRITE_FLAGS)))
+    if (!(domain->newDef = virDomainDefCopy(caps, domain->def, false)))
         goto out;
 
-    if (!(newDef = virDomainDefParseString(caps, xml, -1,
-                                           VIR_DOMAIN_XML_READ_FLAGS)))
-        goto out;
-
-    domain->newDef = newDef;
     ret = 0;
 out:
-    VIR_FREE(xml);
     return ret;
 }
 
@@ -3063,8 +3055,12 @@ int
 virDomainDiskDefAssignAddress(virCapsPtr caps, virDomainDiskDefPtr def)
 {
     int idx = virDiskNameToIndex(def->dst);
-    if (idx < 0)
+    if (idx < 0) {
+        virReportError(VIR_ERR_XML_ERROR,
+                       _("Unknown disk name '%s' and no address specified"),
+                       def->dst);
         return -1;
+    }
 
     switch (def->bus) {
     case VIR_DOMAIN_DISK_BUS_SCSI:
@@ -7320,11 +7316,13 @@ error:
 
 static virDomainRedirdevDefPtr
 virDomainRedirdevDefParseXML(const xmlNodePtr node,
+                             virBitmapPtr bootMap,
                              unsigned int flags)
 {
     xmlNodePtr cur;
     virDomainRedirdevDefPtr def;
     char *bus, *type = NULL;
+    int remaining;
 
     if (VIR_ALLOC(def) < 0) {
         virReportOOMError();
@@ -7356,25 +7354,20 @@ virDomainRedirdevDefParseXML(const xmlNodePtr node,
     }
 
     cur = node->children;
-    while (cur != NULL) {
-        if (cur->type == XML_ELEMENT_NODE) {
-            if (xmlStrEqual(cur->name, BAD_CAST "source")) {
-                int remaining;
-
-                remaining = virDomainChrSourceDefParseXML(&def->source.chr, cur, flags,
-                                                          NULL, NULL, NULL, 0);
-                if (remaining != 0)
-                    goto error;
-            }
-        }
-        cur = cur->next;
-    }
+    /* boot gets parsed in virDomainDeviceInfoParseXML
+     * source gets parsed in virDomainChrSourceDefParseXML
+     * we don't know any of the elements that might remain */
+    remaining = virDomainChrSourceDefParseXML(&def->source.chr, cur, flags,
+                                              NULL, NULL, NULL, 0);
+    if (remaining < 0)
+        goto error;
 
     if (def->source.chr.type == VIR_DOMAIN_CHR_TYPE_SPICEVMC) {
         def->source.chr.data.spicevmc = VIR_DOMAIN_CHR_SPICEVMC_USBREDIR;
     }
 
-    if (virDomainDeviceInfoParseXML(node, NULL, &def->info, flags) < 0)
+    if (virDomainDeviceInfoParseXML(node, bootMap, &def->info,
+                                    flags | VIR_DOMAIN_XML_INTERNAL_ALLOW_BOOT) < 0)
         goto error;
 
     if (def->bus == VIR_DOMAIN_REDIRDEV_BUS_USB &&
@@ -7719,7 +7712,7 @@ virDomainDeviceDefPtr virDomainDeviceDefParse(virCapsPtr caps,
             goto error;
     } else if (xmlStrEqual(node->name, BAD_CAST "redirdev")) {
         dev->type = VIR_DOMAIN_DEVICE_REDIRDEV;
-        if (!(dev->data.redirdev = virDomainRedirdevDefParseXML(node, flags)))
+        if (!(dev->data.redirdev = virDomainRedirdevDefParseXML(node, NULL, flags)))
             goto error;
     } else {
         virReportError(VIR_ERR_XML_ERROR,
@@ -8303,7 +8296,8 @@ virDomainDefParseBootXML(xmlXPathContextPtr ctxt,
 
     if (virXPathULong("count(./devices/disk[boot]"
                       "|./devices/interface[boot]"
-                      "|./devices/hostdev[boot])", ctxt, &deviceBoot) < 0) {
+                      "|./devices/hostdev[boot]"
+                      "|./devices/redirdev[boot])", ctxt, &deviceBoot) < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                        _("cannot count boot devices"));
         goto cleanup;
@@ -10017,6 +10011,7 @@ static virDomainDefPtr virDomainDefParseXML(virCapsPtr caps,
         goto no_memory;
     for (i = 0 ; i < n ; i++) {
         virDomainRedirdevDefPtr redirdev = virDomainRedirdevDefParseXML(nodes[i],
+                                                                        bootMap,
                                                                         flags);
         if (!redirdev)
             goto error;
@@ -13457,7 +13452,8 @@ virDomainRedirdevDefFormat(virBufferPtr buf,
     virBufferAsprintf(buf, "    <redirdev bus='%s'", bus);
     if (virDomainChrSourceDefFormat(buf, &def->source.chr, false, flags) < 0)
         return -1;
-    if (virDomainDeviceInfoFormat(buf, &def->info, flags) < 0)
+    if (virDomainDeviceInfoFormat(buf, &def->info,
+                                  flags | VIR_DOMAIN_XML_INTERNAL_ALLOW_BOOT) < 0)
         return -1;
     virBufferAddLit(buf, "    </redirdev>\n");
 
@@ -14917,22 +14913,39 @@ cleanup:
 }
 
 
+/* Copy src into a new definition; with the quality of the copy
+ * depending on the migratable flag (false for transitions between
+ * persistent and active, true for transitions across save files or
+ * snapshots).  */
 virDomainDefPtr
-virDomainObjCopyPersistentDef(virCapsPtr caps, virDomainObjPtr dom)
+virDomainDefCopy(virCapsPtr caps, virDomainDefPtr src, bool migratable)
 {
     char *xml;
-    virDomainDefPtr cur, ret;
+    virDomainDefPtr ret;
+    unsigned int write_flags = VIR_DOMAIN_XML_WRITE_FLAGS;
+    unsigned int read_flags = VIR_DOMAIN_XML_READ_FLAGS;
 
-    cur = virDomainObjGetPersistentDef(caps, dom);
+    if (migratable)
+        write_flags |= VIR_DOMAIN_XML_INACTIVE | VIR_DOMAIN_XML_MIGRATABLE;
 
-    xml = virDomainDefFormat(cur, VIR_DOMAIN_XML_WRITE_FLAGS);
+    /* Easiest to clone via a round-trip through XML.  */
+    xml = virDomainDefFormat(src, write_flags);
     if (!xml)
         return NULL;
 
-    ret = virDomainDefParseString(caps, xml, -1, VIR_DOMAIN_XML_READ_FLAGS);
+    ret = virDomainDefParseString(caps, xml, -1, read_flags);
 
     VIR_FREE(xml);
     return ret;
+}
+
+virDomainDefPtr
+virDomainObjCopyPersistentDef(virCapsPtr caps, virDomainObjPtr dom)
+{
+    virDomainDefPtr cur;
+
+    cur = virDomainObjGetPersistentDef(caps, dom);
+    return virDomainDefCopy(caps, cur, false);
 }
 
 
