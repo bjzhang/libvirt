@@ -328,6 +328,7 @@ xenUnifiedOpen(virConnectPtr conn, virConnectAuthPtr auth, unsigned int flags)
         virReportOOMError();
         return VIR_DRV_OPEN_ERROR;
     }
+    VIR_INFO("xen xenUnifiedPrivatePtr(driver ptr) is %p", priv);
     if (virMutexInit(&priv->lock) < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        "%s", _("cannot initialize mutex"));
@@ -450,9 +451,10 @@ xenUnifiedClose(virConnectPtr conn)
         if (priv->opened[i])
             drivers[i]->xenClose(conn);
 
-    VIR_FREE(libxl_driver->saveDir);
+    VIR_FREE(priv->saveDir);
     virMutexDestroy(&priv->lock);
     VIR_FREE(conn->privateData);
+    VIR_INFO("finish");
 
     return 0;
 }
@@ -1103,7 +1105,6 @@ xenUnifiedDomainManagedSavePath(xenUnifiedPrivatePtr priv, virDomainPtr dom) {
         return NULL;
     }
 
-    VIR_DEBUG("got managedSave path: %s", ret);
     return ret;
 }
 
@@ -1124,15 +1125,12 @@ xenUnifiedDomainManagedSave(virDomainPtr dom, unsigned int flags)
 
     VIR_INFO("Saving state to %s", name);
 
-    if (priv->opened[XEN_UNIFIED_XEND_OFFSET])
+    if (priv->opened[XEN_UNIFIED_XEND_OFFSET]) {
         ret = xenDaemonDomainSave(dom, name);
-        if (ret == 0) {
-            VIR_INFO("set hasManagedSave");
-            priv->hasManagedSave = true;
-        }
         VIR_INFO("ret: %d", ret);
-    else
+    } else {
         ret = -1;
+    }
 
 cleanup:
     VIR_FREE(name);
@@ -1143,9 +1141,17 @@ static int
 xenUnifiedDomainHasManagedSaveImage(virDomainPtr dom, unsigned int flags)
 {
     GET_PRIVATE(dom->conn);
+    char *name;
+    int ret;
 
     virCheckFlags(0, -1);
-    return priv->hasManagedSave;
+    name = xenUnifiedDomainManagedSavePath(priv, dom);
+    if ( !name )
+        return false;
+
+    ret = virFileExists(name);
+    VIR_FREE(name);
+    return ret;
 }
 
 static int
@@ -1162,7 +1168,6 @@ xenUnifiedDomainManagedSaveRemove(virDomainPtr dom, unsigned int flags)
         goto cleanup;
 
     ret = unlink(name);
-    priv->hasManagedSave = false;
 
 cleanup:
     VIR_FREE(name);
@@ -1607,8 +1612,6 @@ xenUnifiedDomainCreateWithFlags(virDomainPtr dom, unsigned int flags)
             if (unlink(name) < 0) {
                 VIR_WARN("Failed to remove the managed state %s", name);
             }
-
-        priv->hasManagedSave = false;
         goto cleanup;
     }
 

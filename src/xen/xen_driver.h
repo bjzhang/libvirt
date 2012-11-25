@@ -219,9 +219,6 @@ struct _xenUnifiedPrivate {
     virHashTablePtr nameConfigMap;
     /* So we don't refresh too often */
     time_t lastRefresh;
-
-    /* For managed save */
-    bool hasManagedSave;
 };
 
 typedef struct _xenUnifiedPrivate *xenUnifiedPrivatePtr;
