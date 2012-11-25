@@ -1605,13 +1605,14 @@ xenUnifiedDomainCreateWithFlags(virDomainPtr dom, unsigned int flags)
     virCheckFlags(0, -1);
 
     name = xenUnifiedDomainManagedSavePath(priv, dom);
-    if ( name ) {
-        if (priv->opened[XEN_UNIFIED_XEND_OFFSET])
-            VIR_DEBUG("restore from managedSave");
+    if (!name)
+        goto cleanup;
+    if (virFileExists(name)) {
+        if (priv->opened[XEN_UNIFIED_XEND_OFFSET]) {
             ret = xenDaemonDomainRestore(dom->conn, name);
-            if (unlink(name) < 0) {
-                VIR_WARN("Failed to remove the managed state %s", name);
-            }
+            if (ret == 0)
+                unlink(name);
+        }
         goto cleanup;
     }
 
