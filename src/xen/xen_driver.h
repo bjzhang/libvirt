@@ -200,8 +200,6 @@ struct _xenUnifiedPrivate {
     /* Location of config files, either /etc
      * or /var/lib/xen */
     const char *configDir;
-    /* Location of managed save dir, default /var/lib/libvirt/xen/save */
-    char *saveDir;
 
 # if WITH_XEN_INOTIFY
     /* The inotify fd */
