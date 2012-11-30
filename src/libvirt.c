@@ -789,13 +789,13 @@ virRegisterStateDriver(virStateDriverPtr driver)
 
 /**
  * virStateInitialize:
- * @privileged: set to 1 if running with root privilege, 0 otherwise
+ * @privileged: set to true if running with root privilege, false otherwise
  *
  * Initialize all virtualization drivers.
  *
  * Returns 0 if all succeed, -1 upon any failure.
  */
-int virStateInitialize(int privileged) {
+int virStateInitialize(bool privileged) {
     int i;
 
     if (virInitialize() < 0)
@@ -864,6 +864,24 @@ int virStateActive(void) {
     for (i = 0 ; i < virStateDriverTabCount ; i++) {
         if (virStateDriverTab[i]->active &&
             virStateDriverTab[i]->active())
+            ret = 1;
+    }
+    return ret;
+}
+
+/**
+ * virStateStop:
+ *
+ * Run each virtualization driver's "stop" method.
+ *
+ * Returns 0 if successful, -1 on failure
+ */
+int virStateStop(void) {
+    int i, ret = 0;
+
+    for (i = 0 ; i < virStateDriverTabCount ; i++) {
+        if (virStateDriverTab[i]->stop &&
+            virStateDriverTab[i]->stop())
             ret = 1;
     }
     return ret;
@@ -3305,8 +3323,8 @@ virDomainReboot(virDomainPtr domain, unsigned int flags)
     }
 
     /* At most one of these two flags should be set.  */
-    if ((flags & VIR_DOMAIN_SHUTDOWN_ACPI_POWER_BTN) &&
-        (flags & VIR_DOMAIN_SHUTDOWN_GUEST_AGENT)) {
+    if ((flags & VIR_DOMAIN_REBOOT_ACPI_POWER_BTN) &&
+        (flags & VIR_DOMAIN_REBOOT_GUEST_AGENT)) {
         virReportInvalidArg(flags, "%s",
                             _("flags for acpi power button and guest agent are mutually exclusive"));
         goto error;
@@ -6746,10 +6764,10 @@ error:
  * @nparams: pointer to number of memory parameters; input and output
  * @flags: extra flags; not used yet, so callers should always pass 0
  *
- * Get all node memory parameters.  On input, @nparams gives the size
- * of the @params array; on output, @nparams gives how many slots were
- * filled with parameter information, which might be less but will
- * not exceed the input value.
+ * Get all node memory parameters (parameters unsupported by OS will be
+ * omitted).  On input, @nparams gives the size of the @params array;
+ * on output, @nparams gives how many slots were filled with parameter
+ * information, which might be less but will not exceed the input value.
  *
  * As a special case, calling with @params as NULL and @nparams as 0 on
  * input will cause @nparams on output to contain the number of parameters
@@ -6811,7 +6829,8 @@ error:
  *           value nparams of virDomainGetSchedulerType)
  * @flags: extra flags; not used yet, so callers should always pass 0
  *
- * Change all or a subset of the node memory tunables.
+ * Change all or a subset of the node memory tunables. The function
+ * fails if not all of the tunables are supported.
  *
  * Note that it's not recommended to use this function while the
  * outside tuning program is running (such as ksmtuned under Linux),
@@ -8588,6 +8607,85 @@ error:
     virDispatchError(domain->conn);
     return -1;
 }
+
+
+/**
+ * virDomainSendProcessSignal:
+ * @domain: pointer to domain object
+ * @pid_value: a positive integer process ID, or negative integer process group ID
+ * @signum: a signal from the virDomainProcessSignal enum
+ * @flags: one of the virDomainProcessSignalFlag values
+ *
+ * Send a signal to the designated process in the guest
+ *
+ * The signal numbers must be taken from the virDomainProcessSignal
+ * enum. These will be translated to the corresponding signal
+ * number for the guest OS, by the guest agent delivering the
+ * signal. If there is no mapping from virDomainProcessSignal to
+ * the native OS signals, this API will report an error.
+ *
+ * If @pid_value is an integer greater than zero, it is
+ * treated as a process ID. If @pid_value is an integer
+ * less than zero, it is treated as a process group ID.
+ * All the @pid_value numbers are from the container/guest
+ * namespace. The value zero is not valid.
+ *
+ * Not all hypervisors will support sending signals to
+ * arbitrary processes or process groups. If this API is
+ * implemented the minimum requirement is to be able to
+ * use @pid_value==1 (i.e. kill init). No other value is
+ * required to be supported.
+ *
+ * If the @signum is VIR_DOMAIN_PROCESS_SIGNAL_NOP then this
+ * API will simply report whether the process is running in
+ * the container/guest.
+ *
+ * Returns 0 in case of success, -1 in case of failure.
+ */
+int virDomainSendProcessSignal(virDomainPtr domain,
+                               long long pid_value,
+                               unsigned int signum,
+                               unsigned int flags)
+{
+    virConnectPtr conn;
+    VIR_DOMAIN_DEBUG(domain, "pid=%lld, signum=%u flags=%x",
+                     pid_value, signum, flags);
+
+    virResetLastError();
+
+    if (!VIR_IS_CONNECTED_DOMAIN(domain)) {
+        virLibDomainError(VIR_ERR_INVALID_DOMAIN, __FUNCTION__);
+        virDispatchError(NULL);
+        return -1;
+    }
+
+    virCheckNonZeroArgGoto(pid_value, error);
+
+    if (domain->conn->flags & VIR_CONNECT_RO) {
+        virLibDomainError(VIR_ERR_OPERATION_DENIED, __FUNCTION__);
+        goto error;
+    }
+
+    conn = domain->conn;
+
+    if (conn->driver->domainSendProcessSignal) {
+        int ret;
+        ret = conn->driver->domainSendProcessSignal(domain,
+                                                    pid_value,
+                                                    signum,
+                                                    flags);
+        if (ret < 0)
+            goto error;
+        return ret;
+    }
+
+    virLibConnError(VIR_ERR_NO_SUPPORT, __FUNCTION__);
+
+error:
+    virDispatchError(domain->conn);
+    return -1;
+}
+
 
 /**
  * virDomainSetVcpus:
@@ -20222,5 +20320,61 @@ virNodeGetCPUMap(virConnectPtr conn,
 
 error:
     virDispatchError(conn);
+    return -1;
+}
+
+/**
+ * virDomainFSTrim:
+ * @dom: a domain object
+ * @mountPoint: which mount point to trim
+ * @minimum: Minimum contiguous free range to discard in bytes
+ * @flags: extra flags, not used yet, so callers should always pass 0
+ *
+ * Calls FITRIM within the guest (hence guest agent may be
+ * required depending on hypervisor used). Either call it on each
+ * mounted filesystem (@mountPoint is NULL) or just on specified
+ * @mountPoint. @minimum hints that free ranges smaller than this
+ * may be ignored (this is a hint and the guest may not respect
+ * it).  By increasing this value, the fstrim operation will
+ * complete more quickly for filesystems with badly fragmented
+ * free space, although not all blocks will be discarded.
+ * If @minimum is not zero, the command may fail.
+ *
+ * Returns 0 on success, -1 otherwise.
+ */
+int
+virDomainFSTrim(virDomainPtr dom,
+                const char *mountPoint,
+                unsigned long long minimum,
+                unsigned int flags)
+{
+    VIR_DOMAIN_DEBUG(dom, "mountPoint=%s, minimum=%llu, flags=%x",
+                     mountPoint, minimum, flags);
+
+    virResetLastError();
+
+    if (!VIR_IS_DOMAIN(dom)) {
+        virLibDomainError(VIR_ERR_INVALID_DOMAIN, __FUNCTION__);
+        virDispatchError(NULL);
+        return -1;
+    }
+
+    if (dom->conn->flags & VIR_CONNECT_RO) {
+        virLibDomainError(VIR_ERR_OPERATION_DENIED, __FUNCTION__);
+        goto error;
+    }
+
+    if (dom->conn->driver->domainFSTrim) {
+        int ret = dom->conn->driver->domainFSTrim(dom, mountPoint,
+                                                  minimum, flags);
+        if (ret < 0)
+            goto error;
+        return ret;
+    }
+
+    virLibConnError(VIR_ERR_NO_SUPPORT, __FUNCTION__);
+
+error:
+    virDispatchError(dom->conn);
     return -1;
 }

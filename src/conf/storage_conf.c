@@ -479,6 +479,7 @@ virStoragePoolDefParseSource(xmlXPathContextPtr ctxt,
     virStoragePoolOptionsPtr options;
     char *name = NULL;
     char *port = NULL;
+    int n;
 
     relnode = ctxt->node;
     ctxt->node = node;
@@ -510,7 +511,9 @@ virStoragePoolDefParseSource(xmlXPathContextPtr ctxt,
         VIR_FREE(format);
     }
 
-    source->nhost = virXPathNodeSet("./host", ctxt, &nodeset);
+    if ((n = virXPathNodeSet("./host", ctxt, &nodeset)) < 0)
+        goto cleanup;
+    source->nhost = n;
 
     if (source->nhost) {
         if (VIR_ALLOC_N(source->hosts, source->nhost) < 0) {
@@ -1981,7 +1984,8 @@ virStoragePoolList(virConnectPtr conn,
             if (pools) {
                 if (!(pool = virGetStoragePool(conn,
                                                poolobj->def->name,
-                                               poolobj->def->uuid))) {
+                                               poolobj->def->uuid,
+                                               NULL, NULL))) {
                     virStoragePoolObjUnlock(poolobj);
                     goto cleanup;
                 }

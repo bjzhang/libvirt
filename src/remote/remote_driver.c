@@ -68,7 +68,7 @@
 # define HYPER_TO_ULONG(_to, _from) (_to) = (_from)
 #endif
 
-static int inside_daemon = 0;
+static bool inside_daemon = false;
 static virDriverPtr remoteDriver = NULL;
 
 struct private_data {
@@ -150,12 +150,12 @@ static char *get_transport_from_scheme(char *scheme);
 
 #ifdef WITH_LIBVIRTD
 static int
-remoteStartup(int privileged ATTRIBUTE_UNUSED)
+remoteStartup(bool privileged ATTRIBUTE_UNUSED)
 {
     /* Mark that we're inside the daemon so we can avoid
      * re-entering ourselves
      */
-    inside_daemon = 1;
+    inside_daemon = true;
     return 0;
 }
 #endif
@@ -5863,13 +5863,15 @@ get_nonnull_interface(virConnectPtr conn, remote_nonnull_interface iface)
 static virStoragePoolPtr
 get_nonnull_storage_pool(virConnectPtr conn, remote_nonnull_storage_pool pool)
 {
-    return virGetStoragePool(conn, pool.name, BAD_CAST pool.uuid);
+    return virGetStoragePool(conn, pool.name, BAD_CAST pool.uuid,
+                             NULL, NULL);
 }
 
 static virStorageVolPtr
 get_nonnull_storage_vol(virConnectPtr conn, remote_nonnull_storage_vol vol)
 {
-    return virGetStorageVol(conn, vol.pool, vol.name, vol.key);
+    return virGetStorageVol(conn, vol.pool, vol.name, vol.key,
+                            NULL, NULL);
 }
 
 static virNodeDevicePtr
@@ -6122,6 +6124,7 @@ static virDriver remote_driver = {
     .domainMigrateFinish3 = remoteDomainMigrateFinish3, /* 0.9.2 */
     .domainMigrateConfirm3 = remoteDomainMigrateConfirm3, /* 0.9.2 */
     .domainSendKey = remoteDomainSendKey, /* 0.9.3 */
+    .domainSendProcessSignal = remoteDomainSendProcessSignal, /* 1.0.1 */
     .domainBlockJobAbort = remoteDomainBlockJobAbort, /* 0.9.4 */
     .domainGetBlockJobInfo = remoteDomainGetBlockJobInfo, /* 0.9.4 */
     .domainBlockJobSetSpeed = remoteDomainBlockJobSetSpeed, /* 0.9.4 */
@@ -6143,6 +6146,7 @@ static virDriver remote_driver = {
     .nodeSetMemoryParameters = remoteNodeSetMemoryParameters, /* 0.10.2 */
     .nodeGetMemoryParameters = remoteNodeGetMemoryParameters, /* 0.10.2 */
     .nodeGetCPUMap = remoteNodeGetCPUMap, /* 1.0.0 */
+    .domainFSTrim = remoteDomainFSTrim, /* 1.0.1 */
 };
 
 static virNetworkDriver network_driver = {

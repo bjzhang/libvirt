@@ -28,10 +28,11 @@
 # include "internal.h"
 
 # ifdef WITH_LIBVIRTD
-int virStateInitialize(int privileged);
+int virStateInitialize(bool privileged);
 int virStateCleanup(void);
 int virStateReload(void);
 int virStateActive(void);
+int virStateStop(void);
 # endif
 
 /* Feature detection.  This is a libvirt-private interface for determining

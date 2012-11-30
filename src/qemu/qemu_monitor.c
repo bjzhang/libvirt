@@ -283,7 +283,7 @@ qemuMonitorOpenUnix(const char *monitor, pid_t cpid)
             break;
 
         if ((errno == ENOENT || errno == ECONNREFUSED) &&
-            cpid && virProcessKill(cpid, 0) == 0) {
+            (!cpid || virProcessKill(cpid, 0) == 0)) {
             /* ENOENT       : Socket may not have shown up yet
              * ECONNREFUSED : Leftover socket hasn't been removed yet */
             continue;
@@ -297,7 +297,7 @@ qemuMonitorOpenUnix(const char *monitor, pid_t cpid)
 
     if (ret != 0) {
         virReportSystemError(errno, "%s",
-                             _("monitor socket did not show up."));
+                             _("monitor socket did not show up"));
         goto error;
     }
 

@@ -22,7 +22,7 @@
 # include "testutilsqemu.h"
 
 static const char *abs_top_srcdir;
-static struct qemud_driver driver;
+static virQEMUDriver driver;
 
 static unsigned char *
 fakeSecretGetValue(virSecretPtr obj ATTRIBUTE_UNUSED,
@@ -480,6 +480,8 @@ mymain(void)
             QEMU_CAPS_DRIVE, QEMU_CAPS_DRIVE_CACHE_V2,
             QEMU_CAPS_DRIVE_CACHE_UNSAFE, QEMU_CAPS_DRIVE_FORMAT);
     DO_TEST("disk-drive-network-nbd",
+            QEMU_CAPS_DRIVE, QEMU_CAPS_DRIVE_FORMAT);
+    DO_TEST("disk-drive-network-gluster",
             QEMU_CAPS_DRIVE, QEMU_CAPS_DRIVE_FORMAT);
     DO_TEST("disk-drive-network-rbd",
             QEMU_CAPS_DRIVE, QEMU_CAPS_DRIVE_FORMAT);

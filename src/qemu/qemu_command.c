@@ -139,7 +139,7 @@ uname_normalize(struct utsname *ut)
 /**
  * qemuPhysIfaceConnect:
  * @def: the definition of the VM (needed by 802.1Qbh and audit)
- * @driver: pointer to the qemud_driver
+ * @driver: pointer to the driver instance
  * @net: pointer to he VM's interface description with direct device type
  * @qemuCaps: flags for qemu
  * @vmop: VM operation type
@@ -148,7 +148,7 @@ uname_normalize(struct utsname *ut)
  */
 int
 qemuPhysIfaceConnect(virDomainDefPtr def,
-                     struct qemud_driver *driver,
+                     virQEMUDriverPtr driver,
                      virDomainNetDefPtr net,
                      qemuCapsPtr caps,
                      enum virNetDevVPortProfileOp vmop)
@@ -197,7 +197,7 @@ error:
 int
 qemuNetworkIfaceConnect(virDomainDefPtr def,
                         virConnectPtr conn,
-                        struct qemud_driver *driver,
+                        virQEMUDriverPtr driver,
                         virDomainNetDefPtr net,
                         qemuCapsPtr caps)
 {
@@ -1955,6 +1955,10 @@ static int qemuAddRBDHost(virDomainDiskDefPtr disk, char *hostport)
     disk->hosts[disk->nhosts-1].name = strdup(hostport);
     if (!disk->hosts[disk->nhosts-1].name)
         goto no_memory;
+
+    disk->hosts[disk->nhosts-1].transport = VIR_DOMAIN_DISK_PROTO_TRANS_TCP;
+    disk->hosts[disk->nhosts-1].socket = NULL;
+
     return 0;
 
 no_memory:
@@ -2034,6 +2038,144 @@ no_memory:
     VIR_FREE(options);
     virReportOOMError();
     return -1;
+}
+
+static int
+qemuParseGlusterString(virDomainDiskDefPtr def)
+{
+    int ret = -1;
+    char *transp = NULL;
+    char *sock = NULL;
+    char *volimg = NULL;
+    virURIPtr uri = NULL;
+
+    if (!(uri = virURIParse(def->src))) {
+        return -1;
+    }
+
+    if (VIR_ALLOC(def->hosts) < 0)
+        goto no_memory;
+
+    if (STREQ(uri->scheme, "gluster")) {
+        def->hosts->transport = VIR_DOMAIN_DISK_PROTO_TRANS_TCP;
+    } else if (STRPREFIX(uri->scheme, "gluster+")) {
+        transp = strchr(uri->scheme, '+') + 1;
+        def->hosts->transport = virDomainDiskProtocolTransportTypeFromString(transp);
+        if (def->hosts->transport < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("Invalid gluster transport type '%s'"), transp);
+            goto error;
+        }
+    } else {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("Invalid transport/scheme '%s'"), uri->scheme);
+        goto error;
+    }
+    def->nhosts = 0; /* set to 1 once everything succeeds */
+
+    if (def->hosts->transport != VIR_DOMAIN_DISK_PROTO_TRANS_UNIX) {
+        def->hosts->name = strdup(uri->server);
+        if (!def->hosts->name)
+            goto no_memory;
+
+        if (virAsprintf(&def->hosts->port, "%d", uri->port) < 0)
+            goto no_memory;
+    } else {
+        def->hosts->name = NULL;
+        def->hosts->port = 0;
+        if (uri->query) {
+            if (STRPREFIX(uri->query, "socket=")) {
+                sock = strchr(uri->query, '=') + 1;
+                def->hosts->socket = strdup(sock);
+                if (!def->hosts->socket)
+                    goto no_memory;
+            } else {
+                virReportError(VIR_ERR_INTERNAL_ERROR,
+                               _("Invalid query parameter '%s'"), uri->query);
+                goto error;
+            }
+        }
+    }
+    volimg = uri->path + 1; /* skip the prefix slash */
+    def->src = strdup(volimg);
+    if (!def->src)
+        goto no_memory;
+
+    def->nhosts = 1;
+    ret = 0;
+
+cleanup:
+    virURIFree(uri);
+
+    return ret;
+
+no_memory:
+    virReportOOMError();
+error:
+    virDomainDiskHostDefFree(def->hosts);
+    VIR_FREE(def->hosts);
+    goto cleanup;
+}
+
+static int
+qemuBuildGlusterString(virDomainDiskDefPtr disk, virBufferPtr opt)
+{
+    int ret = -1;
+    int port = 0;
+    char *tmpscheme = NULL;
+    char *volimg = NULL;
+    char *sock = NULL;
+    char *builturi = NULL;
+    const char *transp = NULL;
+    virURI uri = {
+        .port = port /* just to clear rest of bits */
+    };
+
+    if (disk->nhosts != 1) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                       _("gluster accepts only one host"));
+        return -1;
+    }
+
+    virBufferAddLit(opt, "file=");
+    transp = virDomainDiskProtocolTransportTypeToString(disk->hosts->transport);
+
+    if (virAsprintf(&tmpscheme, "gluster+%s", transp) < 0)
+        goto no_memory;
+
+    if (virAsprintf(&volimg, "/%s", disk->src) < 0)
+        goto no_memory;
+
+    if (disk->hosts->port) {
+        port = atoi(disk->hosts->port);
+    }
+
+    if (disk->hosts->socket &&
+        virAsprintf(&sock, "socket=%s", disk->hosts->socket) < 0)
+        goto no_memory;
+
+    uri.scheme = tmpscheme; /* gluster+<transport> */
+    uri.server = disk->hosts->name;
+    uri.port = port;
+    uri.path = volimg;
+    uri.query = sock;
+
+    builturi = virURIFormat(&uri);
+    virBufferEscape(opt, ',', ",", "%s", builturi);
+
+    ret = 0;
+
+cleanup:
+    VIR_FREE(builturi);
+    VIR_FREE(tmpscheme);
+    VIR_FREE(volimg);
+    VIR_FREE(sock);
+
+    return ret;
+
+no_memory:
+    virReportOOMError();
+    goto cleanup;
 }
 
 char *
@@ -2176,6 +2318,12 @@ qemuBuildDriveStr(virConnectPtr conn ATTRIBUTE_UNUSED,
                     goto error;
                 virBufferAddChar(&opt, ',');
                 break;
+            case VIR_DOMAIN_DISK_PROTOCOL_GLUSTER:
+                if (qemuBuildGlusterString(disk, &opt) < 0)
+                    goto error;
+                virBufferAddChar(&opt, ',');
+                break;
+
             case VIR_DOMAIN_DISK_PROTOCOL_SHEEPDOG:
                 if (disk->nhosts == 0) {
                     virBufferEscape(&opt, ',', ",", "file=sheepdog:%s,",
@@ -3049,7 +3197,7 @@ error:
 
 char *
 qemuBuildHostNetStr(virDomainNetDefPtr net,
-                    struct qemud_driver *driver,
+                    virQEMUDriverPtr driver,
                     qemuCapsPtr caps,
                     char type_sep,
                     int vlan,
@@ -4094,7 +4242,7 @@ error:
 
 
 static int
-qemuBuildCpuArgStr(const struct qemud_driver *driver,
+qemuBuildCpuArgStr(const virQEMUDriverPtr driver,
                    const virDomainDefPtr def,
                    const char *emulator,
                    qemuCapsPtr caps,
@@ -4423,12 +4571,14 @@ error:
 }
 
 static int
-qemuBuildGraphicsCommandLine(struct qemud_driver *driver,
+qemuBuildGraphicsCommandLine(virQEMUDriverPtr driver,
                              virCommandPtr cmd,
                              virDomainDefPtr def,
                              qemuCapsPtr caps,
                              virDomainGraphicsDefPtr graphics)
 {
+    int i;
+
     if (graphics->type == VIR_DOMAIN_GRAPHICS_TYPE_VNC) {
         virBuffer opt = VIR_BUFFER_INITIALIZER;
 
@@ -4685,7 +4835,7 @@ qemuBuildGraphicsCommandLine(struct qemud_driver *driver,
             break;
         }
 
-        for (int i = 0 ; i < VIR_DOMAIN_GRAPHICS_SPICE_CHANNEL_LAST ; i++) {
+        for (i = 0 ; i < VIR_DOMAIN_GRAPHICS_SPICE_CHANNEL_LAST ; i++) {
             int mode = graphics->data.spice.channels[i];
             switch (mode) {
             case VIR_DOMAIN_GRAPHICS_SPICE_CHANNEL_MODE_SECURE:
@@ -4763,7 +4913,7 @@ error:
  */
 virCommandPtr
 qemuBuildCommandLine(virConnectPtr conn,
-                     struct qemud_driver *driver,
+                     virQEMUDriverPtr driver,
                      virDomainDefPtr def,
                      virDomainChrSourceDefPtr monitor_chr,
                      bool monitor_json,
@@ -5653,6 +5803,18 @@ qemuBuildCommandLine(virConnectPtr conn,
                     {
                         virBuffer opt = VIR_BUFFER_INITIALIZER;
                         if (qemuBuildRBDString(conn, disk, &opt) < 0)
+                            goto error;
+                        if (virBufferError(&opt)) {
+                            virReportOOMError();
+                            goto error;
+                        }
+                        file = virBufferContentAndReset(&opt);
+                    }
+                    break;
+                case VIR_DOMAIN_DISK_PROTOCOL_GLUSTER:
+                    {
+                        virBuffer opt = VIR_BUFFER_INITIALIZER;
+                        if (qemuBuildGlusterString(disk, &opt) < 0)
                             goto error;
                         if (virBufferError(&opt)) {
                             virReportOOMError();
@@ -7048,6 +7210,8 @@ qemuParseCommandLineDisk(virCapsPtr caps,
                         virReportOOMError();
                         goto cleanup;
                     }
+                    def->hosts->transport = VIR_DOMAIN_DISK_PROTO_TRANS_TCP;
+                    def->hosts->socket = NULL;
 
                     VIR_FREE(def->src);
                     def->src = NULL;
@@ -7066,6 +7230,12 @@ qemuParseCommandLineDisk(virCapsPtr caps,
                         goto cleanup;
 
                     VIR_FREE(p);
+                } else if (STRPREFIX(def->src, "gluster")) {
+                    def->type = VIR_DOMAIN_DISK_TYPE_NETWORK;
+                    def->protocol = VIR_DOMAIN_DISK_PROTOCOL_GLUSTER;
+
+                    if (qemuParseGlusterString(def) < 0)
+                        goto cleanup;
                 } else if (STRPREFIX(def->src, "sheepdog:")) {
                     char *p = def->src;
                     char *port, *vdi;
@@ -7101,6 +7271,8 @@ qemuParseCommandLineDisk(virCapsPtr caps,
                             virReportOOMError();
                             goto cleanup;
                         }
+                        def->hosts->transport = VIR_DOMAIN_DISK_PROTO_TRANS_TCP;
+                        def->hosts->socket = NULL;
                         def->src = strdup(vdi);
                         if (!def->src) {
                             virReportOOMError();
@@ -8289,6 +8461,9 @@ virDomainDefPtr qemuParseCommandLine(virCapsPtr caps,
                 disk->type = VIR_DOMAIN_DISK_TYPE_NETWORK;
                 disk->protocol = VIR_DOMAIN_DISK_PROTOCOL_RBD;
                 val += strlen("rbd:");
+            } else if (STRPREFIX(val, "gluster")) {
+                disk->type = VIR_DOMAIN_DISK_TYPE_NETWORK;
+                disk->protocol = VIR_DOMAIN_DISK_PROTOCOL_GLUSTER;
             } else if (STRPREFIX(val, "sheepdog:")) {
                 disk->type = VIR_DOMAIN_DISK_TYPE_NETWORK;
                 disk->protocol = VIR_DOMAIN_DISK_PROTOCOL_SHEEPDOG;
@@ -8373,6 +8548,11 @@ virDomainDefPtr qemuParseCommandLine(virCapsPtr caps,
                         if (!disk->src)
                             goto no_memory;
                     }
+                    break;
+                case VIR_DOMAIN_DISK_PROTOCOL_GLUSTER:
+                    if (qemuParseGlusterString(disk) < 0)
+                        goto error;
+
                     break;
                 }
             }
@@ -8833,6 +9013,9 @@ virDomainDefPtr qemuParseCommandLine(virCapsPtr caps,
                 VIR_FREE(hosts);
                 goto no_memory;
             }
+            first_rbd_disk->hosts[first_rbd_disk->nhosts].transport = VIR_DOMAIN_DISK_PROTO_TRANS_TCP;
+            first_rbd_disk->hosts[first_rbd_disk->nhosts].socket = NULL;
+
             first_rbd_disk->nhosts++;
             token = strtok_r(NULL, ",", &saveptr);
         }

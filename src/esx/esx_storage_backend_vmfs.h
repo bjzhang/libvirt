@@ -1,8 +1,9 @@
+
 /*
- * Copyright (C) 2010-2012 Red Hat, Inc.
- * Copyright IBM Corp. 2008
+ * esx_storage_backend_vmfs.h: ESX storage driver backend for
+ *                             managing VMFS datastores
  *
- * lxc_cgroup.c: LXC cgroup helpers
+ * Copyright (C) 2012 Ata E Husain Bohra <ata.husain@hotmail.com>
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -17,14 +18,14 @@
  * You should have received a copy of the GNU Lesser General Public
  * License along with this library.  If not, see
  * <http://www.gnu.org/licenses/>.
+ *
  */
 
-#ifndef __VIR_LXC_CGROUP_H__
-# define __VIR_LXC_CGROUP_H__
+#ifndef __ESX_STORAGE_BACKEND_VMFS_H__
+# define __ESX_STORAGE_BACKEND_VMFS_H__
 
-# include "domain_conf.h"
-# include "lxc_fuse.h"
+# include "driver.h"
 
-int virLXCCgroupSetup(virDomainDefPtr def);
-int virLXCCgroupGetMeminfo(virLXCMeminfoPtr meminfo);
-#endif /* __VIR_LXC_CGROUP_H__ */
+extern virStorageDriver esxStorageBackendVMFS;
+
+#endif /* __ESX_STORAGE_BACKEND_VMFS_H__ */
