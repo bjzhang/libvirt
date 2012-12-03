@@ -94,6 +94,7 @@ UTIL_SOURCES =							\
 		util/virdbus.c util/virdbus.h			\
 		util/virhash.c util/virhash.h			\
 		util/virhashcode.c util/virhashcode.h           \
+		util/virinitctl.c util/virinitctl.h		\
 		util/virkeycode.c util/virkeycode.h		\
 		util/virkeyfile.c util/virkeyfile.h		\
 		util/virkeymaps.h				\
@@ -111,6 +112,7 @@ UTIL_SOURCES =							\
 		util/virnetlink.c util/virnetlink.h		\
 		util/virrandom.h util/virrandom.c		\
 		util/virsocketaddr.h util/virsocketaddr.c \
+		util/virstring.h util/virstring.c \
 		util/virtime.h util/virtime.c \
 		util/viruri.h util/viruri.c
 

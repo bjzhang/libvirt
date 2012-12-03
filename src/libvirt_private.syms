@@ -1363,6 +1363,10 @@ virFileTouch;
 virFileUpdatePerm;
 
 
+# virinitctl.h
+virInitctlSetRunLevel;
+
+
 # virkeycode.h
 virKeycodeSetTypeFromString;
 virKeycodeSetTypeToString;
@@ -1806,6 +1810,12 @@ virReportSystemErrorFull;
 virSetError;
 virSetErrorLogPriorityFunc;
 virStrerror;
+
+
+# virstring.h
+virStringSplit;
+virStringJoin;
+virStringFreeList;
 
 
 # virtime.h

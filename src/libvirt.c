@@ -3237,7 +3237,9 @@ error:
  *
  * If @flags is set to zero, then the hypervisor will choose the
  * method of shutdown it considers best. To have greater control
- * pass exactly one of the virDomainShutdownFlagValues.
+ * pass one or more of the virDomainShutdownFlagValues. The order
+ * in which the hypervisor tries each shutdown method is undefined,
+ * and a hypervisor is not required to support all methods.
  *
  * Returns 0 in case of success and -1 in case of failure.
  */
@@ -3246,7 +3248,7 @@ virDomainShutdownFlags(virDomainPtr domain, unsigned int flags)
 {
     virConnectPtr conn;
 
-    VIR_DOMAIN_DEBUG(domain);
+    VIR_DOMAIN_DEBUG(domain, "flags=%x", flags);
 
     virResetLastError();
 
@@ -3257,14 +3259,6 @@ virDomainShutdownFlags(virDomainPtr domain, unsigned int flags)
     }
     if (domain->conn->flags & VIR_CONNECT_RO) {
         virLibDomainError(VIR_ERR_OPERATION_DENIED, __FUNCTION__);
-        goto error;
-    }
-
-    /* At most one of these two flags should be set.  */
-    if ((flags & VIR_DOMAIN_SHUTDOWN_ACPI_POWER_BTN) &&
-        (flags & VIR_DOMAIN_SHUTDOWN_GUEST_AGENT)) {
-        virReportInvalidArg(flags, "%s",
-                            _("flags for acpi power button and guest agent are mutually exclusive"));
         goto error;
     }
 
@@ -3296,7 +3290,9 @@ error:
  *
  * If @flags is set to zero, then the hypervisor will choose the
  * method of shutdown it considers best. To have greater control
- * pass exactly one of the virDomainRebootFlagValues.
+ * pass one or more of the virDomainShutdownFlagValues. The order
+ * in which the hypervisor tries each shutdown method is undefined,
+ * and a hypervisor is not required to support all methods.
  *
  * To use guest agent (VIR_DOMAIN_REBOOT_GUEST_AGENT) the domain XML
  * must have <channel> configured.
@@ -3319,14 +3315,6 @@ virDomainReboot(virDomainPtr domain, unsigned int flags)
     }
     if (domain->conn->flags & VIR_CONNECT_RO) {
         virLibDomainError(VIR_ERR_OPERATION_DENIED, __FUNCTION__);
-        goto error;
-    }
-
-    /* At most one of these two flags should be set.  */
-    if ((flags & VIR_DOMAIN_REBOOT_ACPI_POWER_BTN) &&
-        (flags & VIR_DOMAIN_REBOOT_GUEST_AGENT)) {
-        virReportInvalidArg(flags, "%s",
-                            _("flags for acpi power button and guest agent are mutually exclusive"));
         goto error;
     }
 
@@ -6725,7 +6713,8 @@ virNodeSuspendForDuration(virConnectPtr conn,
                           unsigned int flags)
 {
 
-    VIR_DEBUG("conn=%p, target=%d, duration=%lld", conn, target, duration);
+    VIR_DEBUG("conn=%p, target=%d, duration=%lld, flags=%x",
+              conn, target, duration, flags);
 
     virResetLastError();
 
@@ -20245,7 +20234,7 @@ virDomainGetHostname(virDomainPtr domain, unsigned int flags)
 {
     virConnectPtr conn;
 
-    VIR_DOMAIN_DEBUG(domain);
+    VIR_DOMAIN_DEBUG(domain, "flags=%x", flags);
 
     virResetLastError();
 
