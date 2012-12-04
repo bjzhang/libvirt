@@ -3512,8 +3512,10 @@ cmdSchedInfoUpdate(vshControl *ctl, const vshCmd *cmd,
             if (virTypedParameterAssign(&(params[nparams++]),
                                         param->field,
                                         param->type,
-                                        val) < 0)
+                                        val) < 0) {
+                vshSaveLibvirtError();
                 goto cleanup;
+            }
 
             continue;
         }
@@ -3523,8 +3525,10 @@ cmdSchedInfoUpdate(vshControl *ctl, const vshCmd *cmd,
             if (virTypedParameterAssignFromStr(&(params[nparams++]),
                                                param->field,
                                                param->type,
-                                               set_val) < 0)
+                                               set_val) < 0) {
+                vshSaveLibvirtError();
                 goto cleanup;
+            }
 
             continue;
         }
@@ -3576,8 +3580,7 @@ cmdSchedinfo(vshControl *ctl, const vshCmd *cmd)
     /* Print SchedulerType */
     schedulertype = virDomainGetSchedulerType(dom, &nparams);
     if (schedulertype != NULL) {
-        vshPrint(ctl, "%-15s: %s\n", _("Scheduler"),
-             schedulertype);
+        vshPrint(ctl, "%-15s: %s\n", _("Scheduler"), schedulertype);
         VIR_FREE(schedulertype);
     } else {
         vshPrint(ctl, "%-15s: %s\n", _("Scheduler"), _("Unknown"));
