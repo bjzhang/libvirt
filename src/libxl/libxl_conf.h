@@ -35,6 +35,7 @@
 # include "capabilities.h"
 # include "configmake.h"
 # include "bitmap.h"
+# include "virobject.h"
 
 
 # define LIBXL_VNC_PORT_MIN  5900
@@ -78,12 +79,20 @@ struct _libxlDriverPrivate {
     char *saveDir;
 };
 
+typedef struct _libxlEventHookInfo libxlEventHookInfo;
+typedef libxlEventHookInfo *libxlEventHookInfoPtr;
+
 typedef struct _libxlDomainObjPrivate libxlDomainObjPrivate;
 typedef libxlDomainObjPrivate *libxlDomainObjPrivatePtr;
 struct _libxlDomainObjPrivate {
     /* per domain libxl ctx */
     libxl_ctx *ctx;
     libxl_evgen_domain_death *deathW;
+
+    /* fd and timeout registrations, with lock to protect access */
+    virMutex regLock;
+    libxlEventHookInfoPtr fdRegistrations;
+    libxlEventHookInfoPtr timerRegistrations;
 };
 
 # define LIBXL_SAVE_MAGIC "libvirt-xml\n \0 \r"
