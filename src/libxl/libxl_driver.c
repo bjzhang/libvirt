@@ -226,9 +226,9 @@ libxlFDModifyEventHook(void *priv ATTRIBUTE_UNUSED,
 static void
 libxlFDDeregisterEventHook(void *priv ATTRIBUTE_UNUSED,
                            int fd ATTRIBUTE_UNUSED,
-                           void *hnd)
+                           void **hndp)
 {
-    libxlEventHookInfoPtr info = hnd;
+    libxlEventHookInfoPtr info = *hndp;
 
     virMutexLock(&info->priv->regLock);
     LIBXL_EV_REG_REMOVE(info->priv->fdRegistrations, info);
@@ -315,9 +315,9 @@ libxlTimeoutModifyEventHook(void *priv ATTRIBUTE_UNUSED,
 
 static void
 libxlTimeoutDeregisterEventHook(void *priv ATTRIBUTE_UNUSED,
-                                void *hnd)
+                                void **hndp)
 {
-    libxlEventHookInfoPtr info = hnd;
+    libxlEventHookInfoPtr info = *hndp;
 
     virMutexLock(&info->priv->regLock);
     LIBXL_EV_REG_REMOVE(info->priv->timerRegistrations, info);
