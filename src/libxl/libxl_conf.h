@@ -35,6 +35,7 @@
 # include "capabilities.h"
 # include "configmake.h"
 # include "virbitmap.h"
+# include "virconsole.h"
 
 
 # define LIBXL_VNC_PORT_MIN  5900
@@ -84,6 +85,7 @@ struct _libxlDomainObjPrivate {
     /* per domain libxl ctx */
     libxl_ctx *ctx;
     libxl_evgen_domain_death *deathW;
+    virConsolesPtr cons;
 };
 
 # define LIBXL_SAVE_MAGIC "libvirt-xml\n \0 \r"

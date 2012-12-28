@@ -3931,13 +3931,13 @@ libxlDomainOpenConsole(virDomainPtr dom,
     }
 
     if (dev_name) {
-        if (STREQ(def->os.type, "hvm"))
+        if (STREQ(vm->def->os.type, "hvm"))
             type = LIBXL_CONSOLE_TYPE_SERIAL;
         else
             type = LIBXL_CONSOLE_TYPE_PV;
-        ret = libxl_console_get_tty(priv->ctx, vm->id, num, type, console);
+        ret = libxl_console_get_tty(priv->ctx, vm->def->id, num, type, &console);
     } else {
-        ret = libxl_primary_console_get_tty(priv->ctx, vm->id, console);
+        ret = libxl_primary_console_get_tty(priv->ctx, vm->def->id, &console);
     }
     if ( ret )
         goto cleanup;
