@@ -3970,6 +3970,117 @@ libxlDomainSetSchedulerParameters(virDomainPtr dom, virTypedParameterPtr params,
 }
 
 static int
+libxlDomainOpenConsole(virDomainPtr dom,
+                       const char *dev_name,
+                       virStreamPtr st,
+                       unsigned int flags)
+{
+    libxlDriverPrivatePtr driver = dom->conn->privateData;
+    virDomainObjPtr vm = NULL;
+    int ret = -1;
+    int i;
+    virDomainChrDefPtr chr = NULL;
+    libxlDomainObjPrivatePtr priv;
+    char *console = NULL;
+    int num = 0;
+    libxl_console_type type;
+
+    virCheckFlags(VIR_DOMAIN_CONSOLE_SAFE |
+                  VIR_DOMAIN_CONSOLE_FORCE, -1);
+
+    libxlDriverLock(driver);
+    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    libxlDriverUnlock(driver);
+    if (!vm) {
+        char uuidstr[VIR_UUID_STRING_BUFLEN];
+        virUUIDFormat(dom->uuid, uuidstr);
+        virReportError(VIR_ERR_NO_DOMAIN,
+                       _("No domain with matching uuid '%s'"), uuidstr);
+        goto cleanup;
+    }
+
+    if (!virDomainObjIsActive(vm)) {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                       "%s", _("domain is not running"));
+        goto cleanup;
+    }
+
+    priv = vm->privateData;
+
+    if (dev_name) {
+        for (i = 0 ; !chr && i < vm->def->nconsoles ; i++) {
+            if (vm->def->consoles[i]->info.alias &&
+                STREQ(dev_name, vm->def->consoles[i]->info.alias)) {
+                chr = vm->def->consoles[i];
+                num = i;
+            }
+        }
+        for (i = 0 ; !chr && i < vm->def->nserials ; i++) {
+            if (STREQ(dev_name, vm->def->serials[i]->info.alias)) {
+                chr = vm->def->serials[i];
+                num = i;
+            }
+        }
+        for (i = 0 ; !chr && i < vm->def->nparallels ; i++) {
+            if (STREQ(dev_name, vm->def->parallels[i]->info.alias)) {
+                chr = vm->def->parallels[i];
+                num = i;
+            }
+        }
+    } else {
+        if (vm->def->nconsoles)
+            chr = vm->def->consoles[0];
+        else if (vm->def->nserials)
+            chr = vm->def->serials[0];
+    }
+
+    if (!chr) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("cannot find character device %s"),
+                       NULLSTR(dev_name));
+        goto cleanup;
+    }
+
+    if (chr->source.type != VIR_DOMAIN_CHR_TYPE_PTY) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("character device %s is not using a PTY"),
+                       NULLSTR(dev_name));
+        goto cleanup;
+    }
+
+    if (dev_name) {
+        if (STREQ(def->os.type, "hvm"))
+            type = LIBXL_CONSOLE_TYPE_SERIAL;
+        else
+            type = LIBXL_CONSOLE_TYPE_PV;
+        ret = libxl_console_get_tty(priv->ctx, vm->id, num, type, console);
+    } else {
+        ret = libxl_primary_console_get_tty(priv->ctx, vm->id, console);
+    }
+    if ( ret )
+        goto cleanup;
+
+    chr->source.data.file.path = strdup(console);
+    /* handle mutually exclusive access to console devices */
+    ret = virConsoleOpen(priv->cons,
+                         chr->source.data.file.path,
+                         st,
+                         (flags & VIR_DOMAIN_CONSOLE_FORCE) != 0);
+
+    if (ret == 1) {
+        virReportError(VIR_ERR_OPERATION_FAILED, "%s",
+                       _("Active console session exists for this domain"));
+        ret = -1;
+    }
+
+cleanup:
+    VIR_FREE(console);
+    if (vm)
+        virDomainObjUnlock(vm);
+    return ret;
+}
+
+static int
 libxlDomainIsActive(virDomainPtr dom)
 {
     libxlDriverPrivatePtr driver = dom->conn->privateData;
@@ -4166,6 +4277,7 @@ static virDriver libxlDriver = {
     .domainManagedSave = libxlDomainManagedSave, /* 0.9.2 */
     .domainHasManagedSaveImage = libxlDomainHasManagedSaveImage, /* 0.9.2 */
     .domainManagedSaveRemove = libxlDomainManagedSaveRemove, /* 0.9.2 */
+    .domainOpenConsole = libxlDomainOpenConsole, /* 1.0.2 */
     .domainIsActive = libxlDomainIsActive, /* 0.9.0 */
     .domainIsPersistent = libxlDomainIsPersistent, /* 0.9.0 */
     .domainIsUpdated = libxlDomainIsUpdated, /* 0.9.0 */
