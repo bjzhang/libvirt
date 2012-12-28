@@ -36,6 +36,7 @@
 # include "configmake.h"
 # include "bitmap.h"
 # include "virobject.h"
+# include "virconsole.h"
 
 
 # define LIBXL_VNC_PORT_MIN  5900
@@ -88,6 +89,9 @@ struct _libxlDomainObjPrivate {
     /* per domain libxl ctx */
     libxl_ctx *ctx;
     libxl_evgen_domain_death *deathW;
+
+    /* console */
+    virConsolesPtr cons;
 
     /* fd and timeout registrations, with lock to protect access */
     virMutex regLock;
