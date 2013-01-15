@@ -35,6 +35,7 @@
 # include "capabilities.h"
 # include "configmake.h"
 # include "virbitmap.h"
+# include "virobject.h"
 
 
 # define LIBXL_VNC_PORT_MIN  5900
@@ -81,6 +82,8 @@ struct _libxlDriverPrivate {
 typedef struct _libxlDomainObjPrivate libxlDomainObjPrivate;
 typedef libxlDomainObjPrivate *libxlDomainObjPrivatePtr;
 struct _libxlDomainObjPrivate {
+    virObject object;
+
     /* per domain libxl ctx */
     libxl_ctx *ctx;
     libxl_evgen_domain_death *deathW;

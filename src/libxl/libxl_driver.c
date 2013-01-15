@@ -75,6 +75,7 @@ struct _libxlEventHookInfo {
 };
 
 static virClassPtr libxlEventHookInfoClass;
+static virClassPtr libxlDomainObjPrivateClass;
 static libxlDriverPrivatePtr libxl_driver = NULL;
 
 /* Function declarations */
@@ -88,6 +89,27 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
              bool start_paused, int restore_fd);
 
 /* Function definitions */
+static void
+libxlDomainObjPrivateDispose(void *data)
+{
+    libxlDomainObjPrivatePtr priv = data;
+
+    libxl_ctx_free(priv->ctx);
+}
+
+static int
+libxlDomainObjPrivateOnceInit(void)
+{
+    if (!(libxlDomainObjPrivateClass = virClassNew("libxlDomainObjPrivate",
+                                          sizeof(libxlDomainObjPrivate),
+                                          libxlDomainObjPrivateDispose)))
+        return -1;
+
+    return 0;
+}
+
+VIR_ONCE_GLOBAL_INIT(libxlDomainObjPrivate)
+
 static void libxlEventHookInfoDispose(void *obj)
 {
     libxlEventHookInfoPtr info = obj;
@@ -125,6 +147,8 @@ libxlEventHookInfoFree(void *obj)
 {
     libxlEventHookInfoPtr info = obj;
 
+    /* Drop reference on libxlDomainObjectPrivate */
+    virObjectUnref(info->priv);
     /* Drop libvirt event loop reference */
     virObjectUnref(info);
 }
@@ -161,6 +185,7 @@ static int
 libxlFDRegisterEventHook(void *priv, int fd, void **hndp,
                          short events, void *xl_priv)
 {
+    libxlDomainObjPrivatePtr p = priv;
     int vir_events = VIR_EVENT_HANDLE_ERROR;
     libxlEventHookInfoPtr info;
 
@@ -191,8 +216,12 @@ libxlFDRegisterEventHook(void *priv, int fd, void **hndp,
     /* Two references on the object, one for libxl at object creation and now
        one for libvirt's event loop. */
     virObjectRef(info);
+    /* Also take a reference on the domain private object.  Reference is dropped
+       in libxlEventHookInfoFree, ensuring the domain private object outlives
+       the fd event objects. */
+    virObjectRef(p);
 
-    info->priv = priv;
+    info->priv = p;
     info->xl_priv = xl_priv;
     *hndp = info;
     return 0;
@@ -271,6 +300,7 @@ libxlTimeoutRegisterEventHook(void *priv,
                               struct timeval abs_t,
                               void *xl_priv)
 {
+    libxlDomainObjPrivatePtr p = priv;
     libxlEventHookInfoPtr info;
     struct timeval now;
     struct timeval res;
@@ -310,8 +340,12 @@ libxlTimeoutRegisterEventHook(void *priv,
     /* Two references on the object, one for libxl at object creation and now
        one for libvirt's event loop. */
     virObjectRef(info);
+    /* Also take a reference on the domain private object.  Reference is dropped
+       in libxlEventHookInfoFree, ensuring the domain private object outlives
+       the fd event objects. */
+    virObjectRef(p);
 
-    info->priv = priv;
+    info->priv = p;
     info->xl_priv = xl_priv;
     *hndp = info;
     return 0;
@@ -380,7 +414,10 @@ libxlDomainObjPrivateAlloc(void)
 {
     libxlDomainObjPrivatePtr priv;
 
-    if (VIR_ALLOC(priv) < 0)
+    if (libxlDomainObjPrivateInitialize() < 0)
+        return NULL;
+
+    if (!(priv = virObjectNew(libxlDomainObjPrivateClass)))
         return NULL;
 
     libxl_ctx_alloc(&priv->ctx, LIBXL_VERSION, 0, libxl_driver->logger);
@@ -401,7 +438,7 @@ libxlDomainObjPrivateFree(void *data)
     }
 
     libxl_ctx_free(priv->ctx);
-    VIR_FREE(priv);
+    virObjectUnref(priv);
 }
 
 /* driver must be locked before calling */
