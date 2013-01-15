@@ -59,18 +59,22 @@
 /* Number of Xen scheduler parameters */
 #define XEN_SCHED_CREDIT_NPARAM   2
 
-struct libxlOSEventHookFDInfo {
-    libxlDomainObjPrivatePtr priv;
-    void *xl_priv;
-    int watch;
-};
+/* Reference counted object used to store info related to libxl event
+ * registrations
+ */
+typedef struct _libxlEventHookInfo libxlEventHookInfo;
+typedef libxlEventHookInfo *libxlEventHookInfoPtr;
+struct _libxlEventHookInfo {
+    virObject object;
 
-struct libxlOSEventHookTimerInfo {
     libxlDomainObjPrivatePtr priv;
     void *xl_priv;
     int id;
+    virMutex regLock;
+    bool registered;
 };
 
+static virClassPtr libxlEventHookInfoClass;
 static libxlDriverPrivatePtr libxl_driver = NULL;
 
 /* Function declarations */
@@ -84,6 +88,26 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
              bool start_paused, int restore_fd);
 
 /* Function definitions */
+static void libxlEventHookInfoDispose(void *obj)
+{
+    libxlEventHookInfoPtr info = obj;
+
+    virMutexDestroy(&info->regLock);
+}
+
+static int
+libxlEventHookInfoOnceInit(void)
+{
+    if (!(libxlEventHookInfoClass = virClassNew("libxlEventHookInfo",
+                                                sizeof(libxlEventHookInfo),
+                                                libxlEventHookInfoDispose)))
+        return -1;
+
+    return 0;
+}
+
+VIR_ONCE_GLOBAL_INIT(libxlEventHookInfo)
+
 static void
 libxlDriverLock(libxlDriverPrivatePtr driver)
 {
@@ -97,13 +121,28 @@ libxlDriverUnlock(libxlDriverPrivatePtr driver)
 }
 
 static void
+libxlEventHookInfoFree(void *obj)
+{
+    libxlEventHookInfoPtr info = obj;
+
+    /* Drop libvirt event loop reference */
+    virObjectUnref(info);
+}
+
+static void
 libxlFDEventCallback(int watch ATTRIBUTE_UNUSED,
                      int fd,
                      int vir_events,
                      void *fd_info)
 {
-    struct libxlOSEventHookFDInfo *info = fd_info;
+    libxlEventHookInfoPtr info = fd_info;
     int events = 0;
+
+    virMutexLock(&info->regLock);
+    if (!info->registered) {
+        virMutexUnlock(&info->regLock);
+        return;
+    }
 
     if (vir_events & VIR_EVENT_HANDLE_READABLE)
         events |= POLLIN;
@@ -114,13 +153,8 @@ libxlFDEventCallback(int watch ATTRIBUTE_UNUSED,
     if (vir_events & VIR_EVENT_HANDLE_HANGUP)
         events |= POLLHUP;
 
+    virMutexUnlock(&info->regLock);
     libxl_osevent_occurred_fd(info->priv->ctx, info->xl_priv, fd, 0, events);
-}
-
-static void
-libxlFreeFDInfo(void *obj)
-{
-    VIR_FREE(obj);
 }
 
 static int
@@ -128,28 +162,39 @@ libxlFDRegisterEventHook(void *priv, int fd, void **hndp,
                          short events, void *xl_priv)
 {
     int vir_events = VIR_EVENT_HANDLE_ERROR;
-    struct libxlOSEventHookFDInfo *fdinfo;
+    libxlEventHookInfoPtr info;
 
-    if (VIR_ALLOC(fdinfo) < 0) {
-        virReportOOMError();
+    if (libxlEventHookInfoInitialize() < 0)
+        return -1;
+
+    if (!(info = virObjectNew(libxlEventHookInfoClass)))
+        return -1;
+
+    if (virMutexInit(&info->regLock) < 0) {
+        VIR_ERROR(_("cannot initialize event registration mutex"));
+        virObjectUnref(info);
         return -1;
     }
 
-    fdinfo->priv = priv;
-    fdinfo->xl_priv = xl_priv;
-    *hndp = fdinfo;
-
+    info->registered = true;
     if (events & POLLIN)
         vir_events |= VIR_EVENT_HANDLE_READABLE;
     if (events & POLLOUT)
         vir_events |= VIR_EVENT_HANDLE_WRITABLE;
-    fdinfo->watch = virEventAddHandle(fd, vir_events, libxlFDEventCallback,
-                                      fdinfo, libxlFreeFDInfo);
-    if (fdinfo->watch < 0) {
-        VIR_FREE(fdinfo);
-        return fdinfo->watch;
+    info->id = virEventAddHandle(fd, vir_events, libxlFDEventCallback,
+                                 info, libxlEventHookInfoFree);
+    if (info->id < 0) {
+        virObjectUnref(info);
+        return -1;
     }
 
+    /* Two references on the object, one for libxl at object creation and now
+       one for libvirt's event loop. */
+    virObjectRef(info);
+
+    info->priv = priv;
+    info->xl_priv = xl_priv;
+    *hndp = info;
     return 0;
 }
 
@@ -159,15 +204,22 @@ libxlFDModifyEventHook(void *priv ATTRIBUTE_UNUSED,
                        void **hndp,
                        short events)
 {
-    struct libxlOSEventHookFDInfo *fdinfo = *hndp;
+    libxlEventHookInfoPtr info = *hndp;
     int vir_events = VIR_EVENT_HANDLE_ERROR;
+
+    virMutexLock(&info->regLock);
+    if (!info->registered) {
+        virMutexUnlock(&info->regLock);
+        return -1;
+    }
 
     if (events & POLLIN)
         vir_events |= VIR_EVENT_HANDLE_READABLE;
     if (events & POLLOUT)
         vir_events |= VIR_EVENT_HANDLE_WRITABLE;
 
-    virEventUpdateHandle(fdinfo->watch, vir_events);
+    virEventUpdateHandle(info->id, vir_events);
+    virMutexUnlock(&info->regLock);
     return 0;
 }
 
@@ -176,29 +228,41 @@ libxlFDDeregisterEventHook(void *priv ATTRIBUTE_UNUSED,
                            int fd ATTRIBUTE_UNUSED,
                            void *hnd)
 {
-    struct libxlOSEventHookFDInfo *fdinfo = hnd;
+    libxlEventHookInfoPtr info = hnd;
 
-    virEventRemoveHandle(fdinfo->watch);
+    virMutexLock(&info->regLock);
+    if (!info->registered) {
+        virMutexUnlock(&info->regLock);
+        return;
+    }
+
+    virEventRemoveHandle(info->id);
+    info->registered = false;
+    virMutexUnlock(&info->regLock);
+    /* Drop libxl reference */
+    virObjectUnref(info);
 }
 
 static void
 libxlTimerCallback(int timer ATTRIBUTE_UNUSED, void *timer_info)
 {
-    struct libxlOSEventHookTimerInfo *info = timer_info;
+    libxlEventHookInfoPtr info = timer_info;
+
+    virMutexLock(&info->regLock);
+    if (!info->registered) {
+        virMutexUnlock(&info->regLock);
+        return;
+    }
 
     /* libxl expects the event to be deregistered when calling
        libxl_osevent_occurred_timeout, but we dont want the event info
        destroyed.  Disable the timeout and only remove it after returning
        from libxl. */
     virEventUpdateTimeout(info->id, -1);
+    info->registered = false;
+    virMutexUnlock(&info->regLock);
     libxl_osevent_occurred_timeout(info->priv->ctx, info->xl_priv);
     virEventRemoveTimeout(info->id);
-}
-
-static void
-libxlTimerInfoFree(void* obj)
-{
-    VIR_FREE(obj);
 }
 
 static int
@@ -207,17 +271,25 @@ libxlTimeoutRegisterEventHook(void *priv,
                               struct timeval abs_t,
                               void *xl_priv)
 {
+    libxlEventHookInfoPtr info;
     struct timeval now;
     struct timeval res;
     static struct timeval zero;
-    struct libxlOSEventHookTimerInfo *timer_info;
-    int timeout, timer_id;
+    int timeout;
 
-    if (VIR_ALLOC(timer_info) < 0) {
-        virReportOOMError();
+    if (libxlEventHookInfoInitialize() < 0)
+        return -1;
+
+    if (!(info = virObjectNew(libxlEventHookInfoClass)))
+        return -1;
+
+    if (virMutexInit(&info->regLock) < 0) {
+        VIR_ERROR(_("cannot initialize event registration mutex"));
+        virObjectUnref(info);
         return -1;
     }
 
+    info->registered = true;
     gettimeofday(&now, NULL);
     timersub(&abs_t, &now, &res);
     /* Ensure timeout is not overflowed */
@@ -228,17 +300,20 @@ libxlTimeoutRegisterEventHook(void *priv,
     } else {
         timeout = res.tv_sec * 1000 + (res.tv_usec + 999) / 1000;
     }
-    timer_id = virEventAddTimeout(timeout, libxlTimerCallback,
-                                  timer_info, libxlTimerInfoFree);
-    if (timer_id < 0) {
-        VIR_FREE(timer_info);
-        return timer_id;
+    info->id = virEventAddTimeout(timeout, libxlTimerCallback,
+                                  info, libxlEventHookInfoFree);
+    if (info->id < 0) {
+        virObjectUnref(info);
+        return -1;
     }
 
-    timer_info->priv = priv;
-    timer_info->xl_priv = xl_priv;
-    timer_info->id = timer_id;
-    *hndp = timer_info;
+    /* Two references on the object, one for libxl at object creation and now
+       one for libvirt's event loop. */
+    virObjectRef(info);
+
+    info->priv = priv;
+    info->xl_priv = xl_priv;
+    *hndp = info;
     return 0;
 }
 
@@ -254,10 +329,21 @@ libxlTimeoutModifyEventHook(void *priv ATTRIBUTE_UNUSED,
                             void **hndp,
                             struct timeval abs_t ATTRIBUTE_UNUSED)
 {
-    struct libxlOSEventHookTimerInfo *timer_info = *hndp;
+    libxlEventHookInfoPtr info = *hndp;
 
+    virMutexLock(&info->regLock);
+    if (!info->registered) {
+        virMutexUnlock(&info->regLock);
+        return -1;
+    }
+
+    virMutexUnlock(&info->regLock);
     /* Make the timeout fire */
-    virEventUpdateTimeout(timer_info->id, 0);
+    virEventUpdateTimeout(info->id, 0);
+
+    /* This callback is also a deregistration notice from libxl, so drop
+       it's reference */
+    virObjectUnref(info);
     return 0;
 }
 
@@ -265,9 +351,19 @@ static void
 libxlTimeoutDeregisterEventHook(void *priv ATTRIBUTE_UNUSED,
                                 void *hnd)
 {
-    struct libxlOSEventHookTimerInfo *timer_info = hnd;
+    libxlEventHookInfoPtr info = hnd;
 
-    virEventRemoveTimeout(timer_info->id);
+    virMutexLock(&info->regLock);
+    if (!info->registered) {
+        virMutexUnlock(&info->regLock);
+        return;
+    }
+
+    virEventRemoveTimeout(info->id);
+    info->registered = false;
+    virMutexUnlock(&info->regLock);
+    /* Drop libxl reference */
+    virObjectUnref(info);
 }
 
 static const libxl_osevent_hooks libxl_event_callbacks = {
