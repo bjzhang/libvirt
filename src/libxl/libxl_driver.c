@@ -438,7 +438,7 @@ libxlDomainObjPrivateFree(void *data)
     if (priv->deathW)
         libxl_evdisable_domain_death(priv->ctx, priv->deathW);
 
-    libxl_ctx_free(priv->ctx);
+    libxl_ctx_cleanup(priv->ctx);
     virObjectUnref(priv);
 }
 
@@ -600,15 +600,9 @@ libxlVmCleanup(libxlDriverPrivatePtr driver,
                virDomainObjPtr vm,
                virDomainShutoffReason reason)
 {
-    libxlDomainObjPrivatePtr priv = vm->privateData;
     int vnc_port;
     char *file;
     int i;
-
-    if (priv->deathW) {
-        libxl_evdisable_domain_death(priv->ctx, priv->deathW);
-        priv->deathW = NULL;
-    }
 
     if (vm->persistent) {
         vm->def->id = -1;
@@ -666,6 +660,11 @@ libxlVmReap(libxlDriverPrivatePtr driver,
 {
     libxlDomainObjPrivatePtr priv = vm->privateData;
 
+    if (priv->deathW) {
+        libxl_evdisable_domain_death(priv->ctx, priv->deathW);
+        priv->deathW = NULL;
+    }
+
     if (libxl_domain_destroy(priv->ctx, vm->def->id, NULL) < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Unable to cleanup domain %d"), vm->def->id);
@@ -683,18 +682,19 @@ static void
 libxlEventHandler(void *data, const libxl_event *event)
 {
     libxlDriverPrivatePtr driver = libxl_driver;
-    virDomainObjPtr vm = data;
+    virDomainObjPtr vm = NULL;
     virDomainEventPtr dom_event = NULL;
+    (void)data;
 
     libxlDriverLock(driver);
-    virDomainObjLock(vm);
+    vm = virDomainFindByID(&driver->domains, event->domid);
     libxlDriverUnlock(driver);
+
+    if (!vm)
+        goto cleanup;
 
     if (event->type == LIBXL_EVENT_TYPE_DOMAIN_SHUTDOWN) {
         virDomainShutoffReason reason;
-
-        if (event->domid != vm->def->id)
-            goto cleanup;
 
         switch (event->u.domain_shutdown.shutdown_reason) {
             case LIBXL_SHUTDOWN_REASON_POWEROFF:
@@ -2189,7 +2189,10 @@ libxlDomainSaveFlags(virDomainPtr dom, const char *to, const char *dxml,
         goto cleanup;
     }
 
-    ret = libxlDoDomainSave(driver, vm, to);
+    if (libxlDoDomainSave(driver, vm, to) == 0)
+        vm = NULL;
+
+    ret = 0;
 
 cleanup:
     if (vm)
@@ -2388,7 +2391,10 @@ libxlDomainManagedSave(virDomainPtr dom, unsigned int flags)
 
     VIR_INFO("Saving state to %s", name);
 
-    ret = libxlDoDomainSave(driver, vm, name);
+    if (libxlDoDomainSave(driver, vm, name) == 0)
+        vm = NULL;
+
+    ret = 0;
 
 cleanup:
     if (vm)
