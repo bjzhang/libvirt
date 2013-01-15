@@ -421,7 +421,6 @@ libxlDomainObjPrivateAlloc(void)
         return NULL;
 
     libxl_ctx_alloc(&priv->ctx, LIBXL_VERSION, 0, libxl_driver->logger);
-    priv->deathW = NULL;
     libxl_osevent_register_hooks(priv->ctx, &libxl_event_callbacks, priv);
 
     return priv;
@@ -432,10 +431,8 @@ libxlDomainObjPrivateFree(void *data)
 {
     libxlDomainObjPrivatePtr priv = data;
 
-    if (priv->deathW) {
+    if (priv->deathW)
         libxl_evdisable_domain_death(priv->ctx, priv->deathW);
-        VIR_FREE(priv->deathW);
-    }
 
     libxl_ctx_free(priv->ctx);
     virObjectUnref(priv);
@@ -755,9 +752,10 @@ libxlCreateDomEvents(virDomainObjPtr vm)
     return 0;
 
 error:
-    if (priv->deathW)
+    if (priv->deathW) {
         libxl_evdisable_domain_death(priv->ctx, priv->deathW);
-    VIR_FREE(priv->deathW);
+        priv->deathW = NULL;
+    }
     return -1;
 }
 
