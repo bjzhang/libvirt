@@ -100,9 +100,10 @@ libxlDomainObjPrivateDispose(void *data)
 static int
 libxlDomainObjPrivateOnceInit(void)
 {
-    if (!(libxlDomainObjPrivateClass = virClassNew("libxlDomainObjPrivate",
-                                          sizeof(libxlDomainObjPrivate),
-                                          libxlDomainObjPrivateDispose)))
+    if (!(libxlDomainObjPrivateClass = virClassNew(virClassForObject(),
+                                                   "libxlDomainObjPrivate",
+                                                   sizeof(libxlDomainObjPrivate),
+                                                   libxlDomainObjPrivateDispose)))
         return -1;
 
     return 0;
@@ -120,7 +121,8 @@ static void libxlEventHookInfoDispose(void *obj)
 static int
 libxlEventHookInfoOnceInit(void)
 {
-    if (!(libxlEventHookInfoClass = virClassNew("libxlEventHookInfo",
+    if (!(libxlEventHookInfoClass = virClassNew(virClassForObject(),
+                                                "libxlEventHookInfo",
                                                 sizeof(libxlEventHookInfo),
                                                 libxlEventHookInfoDispose)))
         return -1;
