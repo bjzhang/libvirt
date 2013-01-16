@@ -42,7 +42,6 @@
 #include <sys/stat.h>
 #include <inttypes.h>
 #include <strings.h>
-#include <termios.h>
 
 #include <libxml/parser.h>
 #include <libxml/tree.h>
@@ -55,22 +54,22 @@
 #endif
 
 #include "internal.h"
-#include "virterror_internal.h"
+#include "virerror.h"
 #include "base64.h"
-#include "buf.h"
+#include "virbuffer.h"
 #include "console.h"
-#include "util.h"
-#include "memory.h"
-#include "xml.h"
+#include "virutil.h"
+#include "viralloc.h"
+#include "virxml.h"
 #include "libvirt/libvirt-qemu.h"
+#include "libvirt/libvirt-lxc.h"
 #include "virfile.h"
-#include "event_poll.h"
 #include "configmake.h"
-#include "threads.h"
-#include "command.h"
+#include "virthread.h"
+#include "vircommand.h"
 #include "virkeycode.h"
 #include "virnetdevbandwidth.h"
-#include "util/bitmap.h"
+#include "virbitmap.h"
 #include "conf/domain_conf.h"
 #include "virtypedparam.h"
 
@@ -240,6 +239,15 @@ virshErrorHandler(void *unused ATTRIBUTE_UNUSED, virErrorPtr error)
         virDefaultErrorFunc(error);
 }
 
+/* Store a libvirt error that is from a helper API that doesn't raise errors
+ * so it doesn't get overwritten */
+void
+vshSaveLibvirtError(void)
+{
+    virFreeError(last_error);
+    last_error = virSaveLastError();
+}
+
 /*
  * Reset libvirt error on graceful fallback paths
  */
@@ -323,7 +331,10 @@ vshReconnect(vshControl *ctl)
                                    virConnectAuthPtrDefault,
                                    ctl->readonly ? VIR_CONNECT_RO : 0);
     if (!ctl->conn) {
-        vshError(ctl, "%s", _("Failed to reconnect to the hypervisor"));
+        if (disconnected)
+            vshError(ctl, "%s", _("Failed to reconnect to the hypervisor"));
+        else
+            vshError(ctl, "%s", _("failed to connect to the hypervisor"));
     } else {
         if (virConnectRegisterCloseCallback(ctl->conn, vshCatchDisconnect,
                                             NULL, NULL) < 0)
@@ -2178,10 +2189,7 @@ vshInit(vshControl *ctl)
     ctl->eventLoopStarted = true;
 
     if (ctl->name) {
-        ctl->conn = virConnectOpenAuth(ctl->name,
-                                       virConnectAuthPtrDefault,
-                                       ctl->readonly ? VIR_CONNECT_RO : 0);
-
+        vshReconnect(ctl);
         /* Connecting to a named connection must succeed, but we delay
          * connecting to the default connection until we need it
          * (since the first command might be 'connect' which allows a
@@ -2190,7 +2198,6 @@ vshInit(vshControl *ctl)
          */
         if (!ctl->conn) {
             vshReportError(ctl);
-            vshError(ctl, "%s", _("failed to connect to the hypervisor"));
             return false;
         }
     }
@@ -2721,7 +2728,7 @@ vshShowVersion(vshControl *ctl ATTRIBUTE_UNUSED)
     vshPrint(ctl, " Interface");
 # if defined(WITH_NETCF)
     vshPrint(ctl, " netcf");
-# elif defined(HAVE_UDEV)
+# elif defined(WITH_UDEV)
     vshPrint(ctl, " udev");
 # endif
 #endif

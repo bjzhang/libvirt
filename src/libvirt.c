@@ -41,25 +41,27 @@
 # include <winsock2.h>
 #endif
 
-#ifdef HAVE_LIBCURL
+#ifdef WITH_CURL
 # include <curl/curl.h>
 #endif
 
-#include "virterror_internal.h"
-#include "logging.h"
+#include "virerror.h"
+#include "virlog.h"
 #include "datatypes.h"
 #include "driver.h"
 
-#include "uuid.h"
-#include "memory.h"
+#include "viruuid.h"
+#include "viralloc.h"
 #include "configmake.h"
 #include "intprops.h"
-#include "conf.h"
-#include "rpc/virnettlscontext.h"
-#include "command.h"
+#include "virconf.h"
+#if WITH_GNUTLS
+# include "rpc/virnettlscontext.h"
+#endif
+#include "vircommand.h"
 #include "virrandom.h"
 #include "viruri.h"
-#include "threads.h"
+#include "virthread.h"
 
 #ifdef WITH_TEST
 # include "test/test_driver.h"
@@ -268,6 +270,8 @@ winsock_init(void)
 }
 #endif
 
+
+#ifdef WITH_GNUTLS
 static int virTLSMutexInit(void **priv)
 {
     virMutexPtr lock = NULL;
@@ -308,11 +312,11 @@ static int virTLSMutexUnlock(void **priv)
 
 static struct gcry_thread_cbs virTLSThreadImpl = {
     /* GCRY_THREAD_OPTION_VERSION was added in gcrypt 1.4.2 */
-#ifdef GCRY_THREAD_OPTION_VERSION
+# ifdef GCRY_THREAD_OPTION_VERSION
     (GCRY_THREAD_OPTION_PTHREAD | (GCRY_THREAD_OPTION_VERSION << 8)),
-#else
+# else
     GCRY_THREAD_OPTION_PTHREAD,
-#endif
+# endif
     NULL,
     virTLSMutexInit,
     virTLSMutexDestroy,
@@ -320,6 +324,7 @@ static struct gcry_thread_cbs virTLSThreadImpl = {
     virTLSMutexUnlock,
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 };
+#endif
 
 /* Helper macros to implement VIR_DOMAIN_DEBUG using just C99.  This
  * assumes you pass fewer than 15 arguments to VIR_DOMAIN_DEBUG, but
@@ -403,14 +408,18 @@ virGlobalInit(void)
         virErrorInitialize() < 0)
         goto error;
 
+#ifdef WITH_GNUTLS
     gcry_control(GCRYCTL_SET_THREAD_CBS, &virTLSThreadImpl);
     gcry_check_version(NULL);
+#endif
 
     virLogSetFromEnv();
 
+#ifdef WITH_GNUTLS
     virNetTLSInit();
+#endif
 
-#if HAVE_LIBCURL
+#if WITH_CURL
     curl_global_init(CURL_GLOBAL_DEFAULT);
 #endif
 
@@ -790,12 +799,17 @@ virRegisterStateDriver(virStateDriverPtr driver)
 /**
  * virStateInitialize:
  * @privileged: set to true if running with root privilege, false otherwise
+ * @callback: callback to invoke to inhibit shutdown of the daemon
+ * @opaque: data to pass to @callback
  *
  * Initialize all virtualization drivers.
  *
  * Returns 0 if all succeed, -1 upon any failure.
  */
-int virStateInitialize(bool privileged) {
+int virStateInitialize(bool privileged,
+                       virStateInhibitCallback callback,
+                       void *opaque)
+{
     int i;
 
     if (virInitialize() < 0)
@@ -805,7 +819,9 @@ int virStateInitialize(bool privileged) {
         if (virStateDriverTab[i]->initialize) {
             VIR_DEBUG("Running global init for %s state driver",
                       virStateDriverTab[i]->name);
-            if (virStateDriverTab[i]->initialize(privileged) < 0) {
+            if (virStateDriverTab[i]->initialize(privileged,
+                                                 callback,
+                                                 opaque) < 0) {
                 VIR_ERROR(_("Initialization of %s state driver failed"),
                           virStateDriverTab[i]->name);
                 return -1;
@@ -847,24 +863,6 @@ int virStateReload(void) {
         if (virStateDriverTab[i]->reload &&
             virStateDriverTab[i]->reload() < 0)
             ret = -1;
-    }
-    return ret;
-}
-
-/**
- * virStateActive:
- *
- * Run each virtualization driver's "active" method.
- *
- * Returns 0 if none are active, 1 if at least one is.
- */
-int virStateActive(void) {
-    int i, ret = 0;
-
-    for (i = 0 ; i < virStateDriverTabCount ; i++) {
-        if (virStateDriverTab[i]->active &&
-            virStateDriverTab[i]->active())
-            ret = 1;
     }
     return ret;
 }
@@ -1199,18 +1197,19 @@ do_open(const char *name,
             goto failed;
         }
 
-        VIR_DEBUG("trying driver %d (%s) ...",
-              i, virDriverTab[i]->name);
+        VIR_DEBUG("trying driver %d (%s) ...", i, virDriverTab[i]->name);
         res = virDriverTab[i]->open(ret, auth, flags);
         VIR_DEBUG("driver %d %s returned %s",
-              i, virDriverTab[i]->name,
-              res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
-              (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
-               (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
-        if (res == VIR_DRV_OPEN_ERROR) goto failed;
-        else if (res == VIR_DRV_OPEN_SUCCESS) {
+                  i, virDriverTab[i]->name,
+                  res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
+                  (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
+                  (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
+
+        if (res == VIR_DRV_OPEN_SUCCESS) {
             ret->driver = virDriverTab[i];
             break;
+        } else if (res == VIR_DRV_OPEN_ERROR) {
+            goto failed;
         }
     }
 
@@ -1225,14 +1224,15 @@ do_open(const char *name,
     for (i = 0; i < virNetworkDriverTabCount; i++) {
         res = virNetworkDriverTab[i]->open(ret, auth, flags);
         VIR_DEBUG("network driver %d %s returned %s",
-              i, virNetworkDriverTab[i]->name,
-              res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
-              (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
-               (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
-        if (res == VIR_DRV_OPEN_ERROR) {
-            break;
-        } else if (res == VIR_DRV_OPEN_SUCCESS) {
+                  i, virNetworkDriverTab[i]->name,
+                  res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
+                  (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
+                  (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
+
+        if (res == VIR_DRV_OPEN_SUCCESS) {
             ret->networkDriver = virNetworkDriverTab[i];
+            break;
+        } else if (res == VIR_DRV_OPEN_ERROR) {
             break;
         }
     }
@@ -1240,14 +1240,15 @@ do_open(const char *name,
     for (i = 0; i < virInterfaceDriverTabCount; i++) {
         res = virInterfaceDriverTab[i]->open(ret, auth, flags);
         VIR_DEBUG("interface driver %d %s returned %s",
-              i, virInterfaceDriverTab[i]->name,
-              res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
-              (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
-               (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
-        if (res == VIR_DRV_OPEN_ERROR) {
-            break;
-        } else if (res == VIR_DRV_OPEN_SUCCESS) {
+                  i, virInterfaceDriverTab[i]->name,
+                  res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
+                  (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
+                  (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
+
+        if (res == VIR_DRV_OPEN_SUCCESS) {
             ret->interfaceDriver = virInterfaceDriverTab[i];
+            break;
+        } else if (res == VIR_DRV_OPEN_ERROR) {
             break;
         }
     }
@@ -1256,14 +1257,15 @@ do_open(const char *name,
     for (i = 0; i < virStorageDriverTabCount; i++) {
         res = virStorageDriverTab[i]->open(ret, auth, flags);
         VIR_DEBUG("storage driver %d %s returned %s",
-              i, virStorageDriverTab[i]->name,
-              res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
-              (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
-               (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
-        if (res == VIR_DRV_OPEN_ERROR) {
-            break;
-         } else if (res == VIR_DRV_OPEN_SUCCESS) {
+                  i, virStorageDriverTab[i]->name,
+                  res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
+                  (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
+                  (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
+
+        if (res == VIR_DRV_OPEN_SUCCESS) {
             ret->storageDriver = virStorageDriverTab[i];
+            break;
+        } else if (res == VIR_DRV_OPEN_ERROR) {
             break;
         }
     }
@@ -1272,14 +1274,15 @@ do_open(const char *name,
     for (i = 0; i < virDeviceMonitorTabCount; i++) {
         res = virDeviceMonitorTab[i]->open(ret, auth, flags);
         VIR_DEBUG("node driver %d %s returned %s",
-              i, virDeviceMonitorTab[i]->name,
-              res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
-              (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
-               (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
-        if (res == VIR_DRV_OPEN_ERROR) {
-            break;
-        } else if (res == VIR_DRV_OPEN_SUCCESS) {
+                  i, virDeviceMonitorTab[i]->name,
+                  res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
+                  (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
+                  (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
+
+        if (res == VIR_DRV_OPEN_SUCCESS) {
             ret->deviceMonitor = virDeviceMonitorTab[i];
+            break;
+        } else if (res == VIR_DRV_OPEN_ERROR) {
             break;
         }
     }
@@ -1288,14 +1291,15 @@ do_open(const char *name,
     for (i = 0; i < virSecretDriverTabCount; i++) {
         res = virSecretDriverTab[i]->open(ret, auth, flags);
         VIR_DEBUG("secret driver %d %s returned %s",
-              i, virSecretDriverTab[i]->name,
-              res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
-              (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
-               (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
-        if (res == VIR_DRV_OPEN_ERROR) {
-            break;
-         } else if (res == VIR_DRV_OPEN_SUCCESS) {
+                  i, virSecretDriverTab[i]->name,
+                  res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
+                  (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
+                  (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
+
+        if (res == VIR_DRV_OPEN_SUCCESS) {
             ret->secretDriver = virSecretDriverTab[i];
+            break;
+        } else if (res == VIR_DRV_OPEN_ERROR) {
             break;
         }
     }
@@ -1304,14 +1308,15 @@ do_open(const char *name,
     for (i = 0; i < virNWFilterDriverTabCount; i++) {
         res = virNWFilterDriverTab[i]->open(ret, auth, flags);
         VIR_DEBUG("nwfilter driver %d %s returned %s",
-              i, virNWFilterDriverTab[i]->name,
-              res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
-              (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
-               (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
-        if (res == VIR_DRV_OPEN_ERROR) {
-            break;
-         } else if (res == VIR_DRV_OPEN_SUCCESS) {
+                  i, virNWFilterDriverTab[i]->name,
+                  res == VIR_DRV_OPEN_SUCCESS ? "SUCCESS" :
+                  (res == VIR_DRV_OPEN_DECLINED ? "DECLINED" :
+                  (res == VIR_DRV_OPEN_ERROR ? "ERROR" : "unknown status")));
+
+        if (res == VIR_DRV_OPEN_SUCCESS) {
             ret->nwfilterDriver = virNWFilterDriverTab[i];
+            break;
+        } else if (res == VIR_DRV_OPEN_ERROR) {
             break;
         }
     }
@@ -4833,6 +4838,14 @@ virDomainMigrateVersion3(virDomainPtr domain,
     if (uri_out)
         uri = uri_out; /* Did domainMigratePrepare3 change URI? */
 
+    if (flags & VIR_MIGRATE_OFFLINE) {
+        VIR_DEBUG("Offline migration, skipping Perform phase");
+        VIR_FREE(cookieout);
+        cookieoutlen = 0;
+        cancelled = 0;
+        goto finish;
+    }
+
     /* Perform the migration.  The driver isn't supposed to return
      * until the migration is complete. The src VM should remain
      * running, but in paused state until the destination can
@@ -5117,10 +5130,15 @@ virDomainMigrateDirect(virDomainPtr domain,
  *   VIR_MIGRATE_UNDEFINE_SOURCE If the migration is successful, undefine the
  *                               domain on the source host.
  *   VIR_MIGRATE_PAUSED    Leave the domain suspended on the remote side.
+ *   VIR_MIGRATE_NON_SHARED_DISK Migration with non-shared storage with full
+ *                               disk copy
+ *   VIR_MIGRATE_NON_SHARED_INC  Migration with non-shared storage with
+ *                               incremental disk copy
  *   VIR_MIGRATE_CHANGE_PROTECTION Protect against domain configuration
  *                                 changes during the migration process (set
  *                                 automatically when supported).
  *   VIR_MIGRATE_UNSAFE    Force migration even if it is considered unsafe.
+ *   VIR_MIGRATE_OFFLINE Migrate offline
  *
  * VIR_MIGRATE_TUNNELLED requires that VIR_MIGRATE_PEER2PEER be set.
  * Applications using the VIR_MIGRATE_PEER2PEER flag will probably
@@ -5201,6 +5219,23 @@ virDomainMigrate(virDomainPtr domain,
         /* NB, deliberately report error against source object, not dest */
         virLibDomainError(VIR_ERR_OPERATION_DENIED, __FUNCTION__);
         goto error;
+    }
+
+    if (flags & VIR_MIGRATE_OFFLINE) {
+        if (!VIR_DRV_SUPPORTS_FEATURE(domain->conn->driver, domain->conn,
+                                      VIR_DRV_FEATURE_MIGRATION_OFFLINE)) {
+            virLibConnError(VIR_ERR_ARGUMENT_UNSUPPORTED, "%s",
+                            _("offline migration is not supported by "
+                              "the source host"));
+            goto error;
+        }
+        if (!VIR_DRV_SUPPORTS_FEATURE(dconn->driver, dconn,
+                                      VIR_DRV_FEATURE_MIGRATION_OFFLINE)) {
+            virLibConnError(VIR_ERR_ARGUMENT_UNSUPPORTED, "%s",
+                            _("offline migration is not supported by "
+                              "the destination host"));
+            goto error;
+        }
     }
 
     if (flags & VIR_MIGRATE_PEER2PEER) {
@@ -5309,10 +5344,15 @@ error:
  *   VIR_MIGRATE_UNDEFINE_SOURCE If the migration is successful, undefine the
  *                               domain on the source host.
  *   VIR_MIGRATE_PAUSED    Leave the domain suspended on the remote side.
+ *   VIR_MIGRATE_NON_SHARED_DISK Migration with non-shared storage with full
+ *                               disk copy
+ *   VIR_MIGRATE_NON_SHARED_INC  Migration with non-shared storage with
+ *                               incremental disk copy
  *   VIR_MIGRATE_CHANGE_PROTECTION Protect against domain configuration
  *                                 changes during the migration process (set
  *                                 automatically when supported).
  *   VIR_MIGRATE_UNSAFE    Force migration even if it is considered unsafe.
+ *   VIR_MIGRATE_OFFLINE Migrate offline
  *
  * VIR_MIGRATE_TUNNELLED requires that VIR_MIGRATE_PEER2PEER be set.
  * Applications using the VIR_MIGRATE_PEER2PEER flag will probably
@@ -5406,6 +5446,23 @@ virDomainMigrate2(virDomainPtr domain,
         /* NB, deliberately report error against source object, not dest */
         virLibDomainError(VIR_ERR_OPERATION_DENIED, __FUNCTION__);
         goto error;
+    }
+
+    if (flags & VIR_MIGRATE_OFFLINE) {
+        if (!VIR_DRV_SUPPORTS_FEATURE(domain->conn->driver, domain->conn,
+                                      VIR_DRV_FEATURE_MIGRATION_OFFLINE)) {
+            virLibConnError(VIR_ERR_ARGUMENT_UNSUPPORTED, "%s",
+                            _("offline migration is not supported by "
+                              "the source host"));
+            goto error;
+        }
+        if (!VIR_DRV_SUPPORTS_FEATURE(dconn->driver, dconn,
+                                      VIR_DRV_FEATURE_MIGRATION_OFFLINE)) {
+            virLibConnError(VIR_ERR_ARGUMENT_UNSUPPORTED, "%s",
+                            _("offline migration is not supported by "
+                              "the destination host"));
+            goto error;
+        }
     }
 
     if (flags & VIR_MIGRATE_PEER2PEER) {
@@ -5518,10 +5575,16 @@ error:
  *                            on the destination host.
  *   VIR_MIGRATE_UNDEFINE_SOURCE If the migration is successful, undefine the
  *                               domain on the source host.
+ *   VIR_MIGRATE_PAUSED    Leave the domain suspended on the remote side.
+ *   VIR_MIGRATE_NON_SHARED_DISK Migration with non-shared storage with full
+ *                               disk copy
+ *   VIR_MIGRATE_NON_SHARED_INC  Migration with non-shared storage with
+ *                               incremental disk copy
  *   VIR_MIGRATE_CHANGE_PROTECTION Protect against domain configuration
  *                                 changes during the migration process (set
  *                                 automatically when supported).
  *   VIR_MIGRATE_UNSAFE    Force migration even if it is considered unsafe.
+ *   VIR_MIGRATE_OFFLINE Migrate offline
  *
  * The operation of this API hinges on the VIR_MIGRATE_PEER2PEER flag.
  * If the VIR_MIGRATE_PEER2PEER flag is NOT set, the duri parameter
@@ -5585,6 +5648,15 @@ virDomainMigrateToURI(virDomainPtr domain,
 
     virCheckNonNullArgGoto(duri, error);
 
+    if (flags & VIR_MIGRATE_OFFLINE &&
+        !VIR_DRV_SUPPORTS_FEATURE(domain->conn->driver, domain->conn,
+                                  VIR_DRV_FEATURE_MIGRATION_OFFLINE)) {
+        virLibConnError(VIR_ERR_ARGUMENT_UNSUPPORTED, "%s",
+                        _("offline migration is not supported by "
+                          "the source host"));
+        goto error;
+    }
+
     if (flags & VIR_MIGRATE_PEER2PEER) {
         if (VIR_DRV_SUPPORTS_FEATURE(domain->conn->driver, domain->conn,
                                      VIR_DRV_FEATURE_MIGRATION_P2P)) {
@@ -5642,10 +5714,16 @@ error:
  *                            on the destination host.
  *   VIR_MIGRATE_UNDEFINE_SOURCE If the migration is successful, undefine the
  *                               domain on the source host.
+ *   VIR_MIGRATE_PAUSED    Leave the domain suspended on the remote side.
+ *   VIR_MIGRATE_NON_SHARED_DISK Migration with non-shared storage with full
+ *                               disk copy
+ *   VIR_MIGRATE_NON_SHARED_INC  Migration with non-shared storage with
+ *                               incremental disk copy
  *   VIR_MIGRATE_CHANGE_PROTECTION Protect against domain configuration
  *                                 changes during the migration process (set
  *                                 automatically when supported).
  *   VIR_MIGRATE_UNSAFE    Force migration even if it is considered unsafe.
+ *   VIR_MIGRATE_OFFLINE Migrate offline
  *
  * The operation of this API hinges on the VIR_MIGRATE_PEER2PEER flag.
  *
@@ -13386,11 +13464,16 @@ virStorageVolGetKey(virStorageVolPtr vol)
  * virStorageVolCreateXML:
  * @pool: pointer to storage pool
  * @xmlDesc: description of volume to create
- * @flags: extra flags; not used yet, so callers should always pass 0
+ * @flags: bitwise-OR of virStorageVolCreateFlags
  *
  * Create a storage volume within a pool based
  * on an XML description. Not all pools support
- * creation of volumes
+ * creation of volumes.
+ *
+ * Since 1.0.1 VIR_STORAGE_VOL_CREATE_PREALLOC_METADATA
+ * in flags can be used to get higher performance with
+ * qcow2 image files which don't support full preallocation,
+ * by creating a sparse image file with metadata.
  *
  * Returns the storage volume, or NULL on error
  */
@@ -13437,12 +13520,17 @@ error:
  * @pool: pointer to parent pool for the new volume
  * @xmlDesc: description of volume to create
  * @clonevol: storage volume to use as input
- * @flags: extra flags; not used yet, so callers should always pass 0
+ * @flags: bitwise-OR of virStorageVolCreateFlags
  *
  * Create a storage volume in the parent pool, using the
  * 'clonevol' volume as input. Information for the new
  * volume (name, perms)  are passed via a typical volume
  * XML description.
+ *
+ * Since 1.0.1 VIR_STORAGE_VOL_CREATE_PREALLOC_METADATA
+ * in flags can be used to get higher performance with
+ * qcow2 image files which don't support full preallocation,
+ * by creating a sparse image file with metadata.
  *
  * Returns the storage volume, or NULL on error
  */
@@ -19048,6 +19136,67 @@ int virDomainOpenConsole(virDomainPtr dom,
     if (conn->driver->domainOpenConsole) {
         int ret;
         ret = conn->driver->domainOpenConsole(dom, dev_name, st, flags);
+        if (ret < 0)
+            goto error;
+        return ret;
+    }
+
+    virLibConnError(VIR_ERR_NO_SUPPORT, __FUNCTION__);
+
+error:
+    virDispatchError(conn);
+    return -1;
+}
+
+/**
+ * virDomainOpenChannel:
+ * @dom: a domain object
+ * @name: the channel name, or NULL
+ * @st: a stream to associate with the channel
+ * @flags: bitwise-OR of virDomainChannelFlags
+ *
+ * This opens the host interface associated with a channel device on a
+ * guest, if the host interface is supported.  If @name is given, it
+ * can match either the device alias (e.g. "channel0"), or the virtio
+ * target name (e.g. "org.qemu.guest_agent.0").  If @name is omitted,
+ * then the first channel is opened. The channel is associated with
+ * the passed in @st stream, which should have been opened in
+ * non-blocking mode for bi-directional I/O.
+ *
+ * By default, when @flags is 0, the open will fail if libvirt detects
+ * that the channel is already in use by another client; passing
+ * VIR_DOMAIN_CHANNEL_FORCE will cause libvirt to forcefully remove the
+ * other client prior to opening this channel.
+ *
+ * Returns 0 if the channel was opened, -1 on error
+ */
+int virDomainOpenChannel(virDomainPtr dom,
+                         const char *name,
+                         virStreamPtr st,
+                         unsigned int flags)
+{
+    virConnectPtr conn;
+
+    VIR_DOMAIN_DEBUG(dom, "name=%s, st=%p, flags=%x",
+                     NULLSTR(name), st, flags);
+
+    virResetLastError();
+
+    if (!VIR_IS_DOMAIN(dom)) {
+        virLibDomainError(VIR_ERR_INVALID_DOMAIN, __FUNCTION__);
+        virDispatchError(NULL);
+        return -1;
+    }
+
+    conn = dom->conn;
+    if (conn->flags & VIR_CONNECT_RO) {
+        virLibDomainError(VIR_ERR_OPERATION_DENIED, __FUNCTION__);
+        goto error;
+    }
+
+    if (conn->driver->domainOpenChannel) {
+        int ret;
+        ret = conn->driver->domainOpenChannel(dom, name, st, flags);
         if (ret < 0)
             goto error;
         return ret;

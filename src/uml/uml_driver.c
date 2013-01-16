@@ -46,17 +46,17 @@
 
 #include "uml_driver.h"
 #include "uml_conf.h"
-#include "buf.h"
-#include "util.h"
+#include "virbuffer.h"
+#include "virutil.h"
 #include "nodeinfo.h"
-#include "stats_linux.h"
+#include "virstatslinux.h"
 #include "capabilities.h"
-#include "memory.h"
-#include "uuid.h"
+#include "viralloc.h"
+#include "viruuid.h"
 #include "domain_conf.h"
 #include "domain_audit.h"
 #include "datatypes.h"
-#include "logging.h"
+#include "virlog.h"
 #include "domain_nwfilter.h"
 #include "virfile.h"
 #include "fdstream.h"
@@ -372,6 +372,11 @@ reread:
             }
 
             dom->def->id = driver->nextvmid++;
+
+            if (!driver->nactive && driver->inhibitCallback)
+                driver->inhibitCallback(true, driver->inhibitOpaque);
+            driver->nactive++;
+
             virDomainObjSetState(dom, VIR_DOMAIN_RUNNING,
                                  VIR_DOMAIN_RUNNING_BOOTED);
 
@@ -419,7 +424,9 @@ cleanup:
  * Initialization function for the Uml daemon
  */
 static int
-umlStartup(bool privileged)
+umlStartup(bool privileged,
+           virStateInhibitCallback callback,
+           void *opaque)
 {
     char *base = NULL;
     char *userdir = NULL;
@@ -428,6 +435,8 @@ umlStartup(bool privileged)
         return -1;
 
     uml_driver->privileged = privileged;
+    uml_driver->inhibitCallback = callback;
+    uml_driver->inhibitOpaque = opaque;
 
     if (virMutexInit(&uml_driver->lock) < 0) {
         VIR_FREE(uml_driver);
@@ -500,7 +509,8 @@ umlStartup(bool privileged)
     if (virFileMakePath(uml_driver->monitorDir) < 0) {
         char ebuf[1024];
         VIR_ERROR(_("Failed to create monitor directory %s: %s"),
-                  uml_driver->monitorDir, virStrerror(errno, ebuf, sizeof(ebuf)));
+                  uml_driver->monitorDir,
+                  virStrerror(errno, ebuf, sizeof(ebuf)));
         goto error;
     }
 
@@ -508,6 +518,10 @@ umlStartup(bool privileged)
     if (inotify_add_watch(uml_driver->inotifyFD,
                           uml_driver->monitorDir,
                           IN_CREATE | IN_MODIFY | IN_DELETE) < 0) {
+        char ebuf[1024];
+        VIR_ERROR(_("Failed to create inotify watch on %s: %s"),
+                  uml_driver->monitorDir,
+                  virStrerror(errno, ebuf, sizeof(ebuf)));
         goto error;
     }
 
@@ -585,27 +599,6 @@ umlReload(void) {
     return 0;
 }
 
-/**
- * umlActive:
- *
- * Checks if the Uml daemon is active, i.e. has an active domain or
- * an active network
- *
- * Returns 1 if active, 0 otherwise
- */
-static int
-umlActive(void) {
-    int active = 0;
-
-    if (!uml_driver)
-        return 0;
-
-    umlDriverLock(uml_driver);
-    active = virDomainObjListNumOfDomains(&uml_driver->domains, 1);
-    umlDriverUnlock(uml_driver);
-
-    return active;
-}
 
 static void
 umlShutdownOneVM(void *payload, const void *name ATTRIBUTE_UNUSED, void *opaque)
@@ -1154,6 +1147,10 @@ static void umlShutdownVMDaemon(struct uml_driver *driver,
         vm->def->id = -1;
         vm->newDef = NULL;
     }
+
+    driver->nactive--;
+    if (!driver->nactive && driver->inhibitCallback)
+        driver->inhibitCallback(false, driver->inhibitOpaque);
 }
 
 
@@ -2634,7 +2631,6 @@ static virStateDriver umlStateDriver = {
     .initialize = umlStartup,
     .cleanup = umlShutdown,
     .reload = umlReload,
-    .active = umlActive,
 };
 
 int umlRegister(void) {

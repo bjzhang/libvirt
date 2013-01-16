@@ -30,12 +30,12 @@
 #include "virnetclient.h"
 #include "virnetsocket.h"
 #include "virkeepalive.h"
-#include "memory.h"
-#include "threads.h"
+#include "viralloc.h"
+#include "virthread.h"
 #include "virfile.h"
-#include "logging.h"
-#include "util.h"
-#include "virterror_internal.h"
+#include "virlog.h"
+#include "virutil.h"
+#include "virerror.h"
 
 #define VIR_FROM_THIS VIR_FROM_RPC
 
@@ -70,7 +70,9 @@ struct _virNetClient {
     virNetSocketPtr sock;
     bool asyncIO;
 
+#if WITH_GNUTLS
     virNetTLSSessionPtr tls;
+#endif
     char *hostname;
 
     virNetClientProgramPtr *programs;
@@ -79,7 +81,7 @@ struct _virNetClient {
     /* For incoming message packets */
     virNetMessage msg;
 
-#if HAVE_SASL
+#if WITH_SASL
     virNetSASLSessionPtr sasl;
 #endif
 
@@ -115,7 +117,8 @@ static void virNetClientDispose(void *obj);
 
 static int virNetClientOnceInit(void)
 {
-    if (!(virNetClientClass = virClassNew("virNetClient",
+    if (!(virNetClientClass = virClassNew(virClassForObject(),
+                                          "virNetClient",
                                           sizeof(virNetClient),
                                           virNetClientDispose)))
         return -1;
@@ -627,8 +630,10 @@ void virNetClientDispose(void *obj)
     if (client->sock)
         virNetSocketRemoveIOCallback(client->sock);
     virObjectUnref(client->sock);
+#if WITH_GNUTLS
     virObjectUnref(client->tls);
-#if HAVE_SASL
+#endif
+#if WITH_SASL
     virObjectUnref(client->sasl);
 #endif
 
@@ -663,9 +668,11 @@ virNetClientCloseLocked(virNetClientPtr client)
 
     virObjectUnref(client->sock);
     client->sock = NULL;
+#if WITH_GNUTLS
     virObjectUnref(client->tls);
     client->tls = NULL;
-#if HAVE_SASL
+#endif
+#if WITH_SASL
     virObjectUnref(client->sasl);
     client->sasl = NULL;
 #endif
@@ -733,7 +740,7 @@ void virNetClientClose(virNetClientPtr client)
 }
 
 
-#if HAVE_SASL
+#if WITH_SASL
 void virNetClientSetSASLSession(virNetClientPtr client,
                                 virNetSASLSessionPtr sasl)
 {
@@ -745,6 +752,7 @@ void virNetClientSetSASLSession(virNetClientPtr client,
 #endif
 
 
+#if WITH_GNUTLS
 int virNetClientSetTLSSession(virNetClientPtr client,
                               virNetTLSContextPtr tls)
 {
@@ -755,12 +763,12 @@ int virNetClientSetTLSSession(virNetClientPtr client,
     sigset_t oldmask, blockedsigs;
 
     sigemptyset(&blockedsigs);
-#ifdef SIGWINCH
+# ifdef SIGWINCH
     sigaddset(&blockedsigs, SIGWINCH);
-#endif
-#ifdef SIGCHLD
+# endif
+# ifdef SIGCHLD
     sigaddset(&blockedsigs, SIGCHLD);
-#endif
+# endif
     sigaddset(&blockedsigs, SIGPIPE);
 
     virNetClientLock(client);
@@ -847,14 +855,17 @@ error:
     virNetClientUnlock(client);
     return -1;
 }
+#endif
 
 bool virNetClientIsEncrypted(virNetClientPtr client)
 {
     bool ret = false;
     virNetClientLock(client);
+#if WITH_GNUTLS
     if (client->tls)
         ret = true;
-#if HAVE_SASL
+#endif
+#if WITH_SASL
     if (client->sasl)
         ret = true;
 #endif
@@ -956,6 +967,7 @@ const char *virNetClientRemoteAddrString(virNetClientPtr client)
     return virNetSocketRemoteAddrString(client->sock);
 }
 
+#if WITH_GNUTLS
 int virNetClientGetTLSKeySize(virNetClientPtr client)
 {
     int ret = 0;
@@ -965,6 +977,7 @@ int virNetClientGetTLSKeySize(virNetClientPtr client)
     virNetClientUnlock(client);
     return ret;
 }
+#endif
 
 static int
 virNetClientCallDispatchReply(virNetClientPtr client)
@@ -996,6 +1009,11 @@ virNetClientCallDispatchReply(virNetClientPtr client)
     memcpy(&thecall->msg->header, &client->msg.header, sizeof(client->msg.header));
     thecall->msg->bufferLength = client->msg.bufferLength;
     thecall->msg->bufferOffset = client->msg.bufferOffset;
+
+    thecall->msg->nfds = client->msg.nfds;
+    thecall->msg->fds = client->msg.fds;
+    client->msg.nfds = 0;
+    client->msg.fds = NULL;
 
     thecall->mode = VIR_NET_CLIENT_MODE_COMPLETE;
 
@@ -1290,7 +1308,9 @@ virNetClientIOHandleInput(virNetClientPtr client)
 
                 if (client->msg.header.type == VIR_NET_REPLY_WITH_FDS) {
                     size_t i;
-                    if (virNetMessageDecodeNumFDs(&client->msg) < 0)
+
+                    if (client->msg.nfds == 0 &&
+                        virNetMessageDecodeNumFDs(&client->msg) < 0)
                         return -1;
 
                     for (i = client->msg.donefds ; i < client->msg.nfds ; i++) {
@@ -1313,8 +1333,7 @@ virNetClientIOHandleInput(virNetClientPtr client)
                 }
 
                 ret = virNetClientCallDispatch(client);
-                client->msg.bufferOffset = client->msg.bufferLength = 0;
-                VIR_FREE(client->msg.buffer);
+                virNetMessageClear(&client->msg);
                 /*
                  * We've completed one call, but we don't want to
                  * spin around the loop forever if there are many

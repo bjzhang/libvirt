@@ -29,9 +29,9 @@
 # include "network_conf.h"
 # include "domain_conf.h"
 # include "domain_event.h"
-# include "virterror_internal.h"
-# include "threads.h"
-# include "command.h"
+# include "virerror.h"
+# include "virthread.h"
+# include "vircommand.h"
 # include "virhash.h"
 
 # define umlDebug(fmt, ...) do {} while(0)
@@ -45,11 +45,14 @@ struct uml_driver {
     virMutex lock;
 
     bool privileged;
+    virStateInhibitCallback inhibitCallback;
+    void *inhibitOpaque;
 
     unsigned long umlVersion;
     int nextvmid;
 
     virDomainObjList domains;
+    size_t nactive;
 
     char *configDir;
     char *autostartDir;

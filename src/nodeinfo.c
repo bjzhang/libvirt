@@ -33,25 +33,48 @@
 #include <sched.h>
 #include "conf/domain_conf.h"
 
-#if HAVE_NUMACTL
+#if WITH_NUMACTL
 # define NUMA_VERSION1_COMPATIBILITY 1
 # include <numa.h>
 #endif
 
+#ifdef __FreeBSD__
+# include <sys/types.h>
+# include <sys/sysctl.h>
+#endif
+
 #include "c-ctype.h"
-#include "memory.h"
+#include "viralloc.h"
 #include "nodeinfo.h"
 #include "physmem.h"
-#include "util.h"
-#include "logging.h"
-#include "virterror_internal.h"
+#include "virutil.h"
+#include "virlog.h"
+#include "virerror.h"
 #include "count-one-bits.h"
 #include "intprops.h"
+#include "virarch.h"
 #include "virfile.h"
 #include "virtypedparam.h"
 
 
 #define VIR_FROM_THIS VIR_FROM_NONE
+
+#ifdef __FreeBSD__
+static int
+freebsdNodeGetCPUCount(void)
+{
+    int ncpu_mib[2] = { CTL_HW, HW_NCPU };
+    unsigned long ncpu;
+    size_t ncpu_len = sizeof(ncpu);
+
+    if (sysctl(ncpu_mib, 2, &ncpu, &ncpu_len, NULL, 0) == -1) {
+        virReportSystemError(errno, "%s", _("Cannot obtain CPU count"));
+        return -1;
+    }
+
+    return ncpu;
+}
+#endif
 
 #ifdef __linux__
 # define CPUINFO_PATH "/proc/cpuinfo"
@@ -841,13 +864,11 @@ error:
 }
 #endif
 
-int nodeGetInfo(virConnectPtr conn ATTRIBUTE_UNUSED, virNodeInfoPtr nodeinfo) {
-    struct utsname info;
+int nodeGetInfo(virConnectPtr conn ATTRIBUTE_UNUSED, virNodeInfoPtr nodeinfo)
+{
+    virArch hostarch = virArchFromHost();
 
-    memset(nodeinfo, 0, sizeof(*nodeinfo));
-    uname(&info);
-
-    if (virStrcpyStatic(nodeinfo->model, info.machine) == NULL)
+    if (virStrcpyStatic(nodeinfo->model, virArchToString(hostarch)) == NULL)
         return -1;
 
 #ifdef __linux__
@@ -870,6 +891,42 @@ int nodeGetInfo(virConnectPtr conn ATTRIBUTE_UNUSED, virNodeInfoPtr nodeinfo) {
 cleanup:
     VIR_FORCE_FCLOSE(cpuinfo);
     return ret;
+    }
+#elif defined(__FreeBSD__)
+    {
+    nodeinfo->nodes = 1;
+    nodeinfo->sockets = 1;
+    nodeinfo->threads = 1;
+
+    nodeinfo->cpus = freebsdNodeGetCPUCount();
+    if (nodeinfo->cpus == -1)
+        return -1;
+
+    nodeinfo->cores = nodeinfo->cpus;
+
+    unsigned long cpu_freq;
+    size_t cpu_freq_len = sizeof(cpu_freq);
+
+    if (sysctlbyname("dev.cpu.0.freq", &cpu_freq, &cpu_freq_len, NULL, 0) < 0) {
+        virReportSystemError(errno, "%s", _("cannot obtain CPU freq"));
+        return -1;
+    }
+
+    nodeinfo->mhz = cpu_freq;
+
+    /* get memory information */
+    int mib[2] = { CTL_HW, HW_PHYSMEM };
+    unsigned long physmem;
+    size_t len = sizeof(physmem);
+
+    if (sysctl(mib, 2, &physmem, &len, NULL, 0) == -1) {
+        virReportSystemError(errno, "%s", _("cannot obtain memory size"));
+        return -1;
+    }
+
+    nodeinfo->memory = (unsigned long)(physmem / 1024);
+
+    return 0;
     }
 #else
     /* XXX Solaris will need an impl later if they port QEMU driver */
@@ -929,17 +986,17 @@ int nodeGetMemoryStats(virConnectPtr conn ATTRIBUTE_UNUSED,
                 return -1;
             }
         } else {
-# if HAVE_NUMACTL
+# if WITH_NUMACTL
             if (numa_available() < 0) {
 # endif
                 virReportError(VIR_ERR_INTERNAL_ERROR,
                                "%s", _("NUMA not supported on this host"));
                 return -1;
-# if HAVE_NUMACTL
+# if WITH_NUMACTL
             }
 # endif
 
-# if HAVE_NUMACTL
+# if WITH_NUMACTL
             if (cellNum > numa_max_node()) {
                 virReportInvalidArg(cellNum,
                                     _("cellNum in %s must be less than or equal to %d"),
@@ -978,7 +1035,7 @@ int nodeGetMemoryStats(virConnectPtr conn ATTRIBUTE_UNUSED,
 int
 nodeGetCPUCount(void)
 {
-#ifdef __linux__
+#if defined(__linux__)
     /* To support older kernels that lack cpu/present, such as 2.6.18
      * in RHEL5, we fall back to count cpu/cpuNN entries; this assumes
      * that such kernels also lack hotplug, and therefore cpu/cpuNN
@@ -1008,6 +1065,8 @@ nodeGetCPUCount(void)
 
     VIR_FREE(cpupath);
     return i;
+#elif defined(__FreeBSD__)
+    return freebsdNodeGetCPUCount();
 #else
     virReportError(VIR_ERR_NO_SUPPORT, "%s",
                    _("host cpu counting not implemented on this platform"));
@@ -1400,7 +1459,7 @@ cleanup:
     return ret;
 }
 
-#if HAVE_NUMACTL
+#if WITH_NUMACTL
 # if LIBNUMA_API_VERSION <= 1
 #  define NUMA_MAX_N_CPUS 4096
 # else

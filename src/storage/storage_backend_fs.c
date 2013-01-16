@@ -37,19 +37,19 @@
 #include <libxml/tree.h>
 #include <libxml/xpath.h>
 
-#if HAVE_LIBBLKID
+#if WITH_BLKID
 # include <blkid/blkid.h>
 #endif
 
-#include "virterror_internal.h"
+#include "virerror.h"
 #include "storage_backend_fs.h"
 #include "storage_conf.h"
-#include "storage_file.h"
-#include "command.h"
-#include "memory.h"
-#include "xml.h"
+#include "virstoragefile.h"
+#include "vircommand.h"
+#include "viralloc.h"
+#include "virxml.h"
 #include "virfile.h"
-#include "logging.h"
+#include "virlog.h"
 
 #define VIR_FROM_THIS VIR_FROM_STORAGE
 
@@ -540,7 +540,7 @@ virStorageBackendFileSystemStart(virConnectPtr conn ATTRIBUTE_UNUSED,
 }
 #endif /* WITH_STORAGE_FS */
 
-#if HAVE_LIBBLKID
+#if WITH_BLKID
 static virStoragePoolProbeResult
 virStorageBackendFileSystemProbe(const char *device,
                                  const char *format) {
@@ -611,7 +611,7 @@ error:
     return ret;
 }
 
-#else /* #if HAVE_LIBBLKID */
+#else /* #if WITH_BLKID */
 
 static virStoragePoolProbeResult
 virStorageBackendFileSystemProbe(const char *device ATTRIBUTE_UNUSED,
@@ -624,7 +624,7 @@ virStorageBackendFileSystemProbe(const char *device ATTRIBUTE_UNUSED,
     return FILESYSTEM_PROBE_ERROR;
 }
 
-#endif /* #if HAVE_LIBBLKID */
+#endif /* #if WITH_BLKID */
 
 /* some platforms don't support mkfs */
 #ifdef MKFS
@@ -1000,6 +1000,13 @@ virStorageBackendFileSystemVolCreate(virConnectPtr conn ATTRIBUTE_UNUSED,
         return -1;
     }
 
+    if (virFileExists(vol->target.path)) {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                       _("volume target path '%s' already exists"),
+                       vol->target.path);
+        return -1;
+    }
+
     VIR_FREE(vol->key);
     vol->key = strdup(vol->target.path);
     if (vol->key == NULL) {
@@ -1045,7 +1052,8 @@ static int
 _virStorageBackendFileSystemVolBuild(virConnectPtr conn,
                                      virStoragePoolObjPtr pool,
                                      virStorageVolDefPtr vol,
-                                     virStorageVolDefPtr inputvol)
+                                     virStorageVolDefPtr inputvol,
+                                     unsigned int flags)
 {
     virStorageBackendBuildVolFrom create_func;
     int tool_type;
@@ -1078,7 +1086,7 @@ _virStorageBackendFileSystemVolBuild(virConnectPtr conn,
         return -1;
     }
 
-    if (create_func(conn, pool, vol, inputvol, 0) < 0)
+    if (create_func(conn, pool, vol, inputvol, flags) < 0)
         return -1;
     return 0;
 }
@@ -1091,8 +1099,11 @@ _virStorageBackendFileSystemVolBuild(virConnectPtr conn,
 static int
 virStorageBackendFileSystemVolBuild(virConnectPtr conn,
                                     virStoragePoolObjPtr pool,
-                                    virStorageVolDefPtr vol) {
-    return _virStorageBackendFileSystemVolBuild(conn, pool, vol, NULL);
+                                    virStorageVolDefPtr vol,
+                                    unsigned int flags) {
+    virCheckFlags(VIR_STORAGE_VOL_CREATE_PREALLOC_METADATA, -1);
+
+    return _virStorageBackendFileSystemVolBuild(conn, pool, vol, NULL, flags);
 }
 
 /*
@@ -1105,9 +1116,9 @@ virStorageBackendFileSystemVolBuildFrom(virConnectPtr conn,
                                         virStorageVolDefPtr inputvol,
                                         unsigned int flags)
 {
-    virCheckFlags(0, -1);
+    virCheckFlags(VIR_STORAGE_VOL_CREATE_PREALLOC_METADATA, -1);
 
-    return _virStorageBackendFileSystemVolBuild(conn, pool, vol, inputvol);
+    return _virStorageBackendFileSystemVolBuild(conn, pool, vol, inputvol, flags);
 }
 
 /**

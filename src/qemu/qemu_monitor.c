@@ -31,9 +31,9 @@
 #include "qemu_monitor.h"
 #include "qemu_monitor_text.h"
 #include "qemu_monitor_json.h"
-#include "virterror_internal.h"
-#include "memory.h"
-#include "logging.h"
+#include "virerror.h"
+#include "viralloc.h"
+#include "virlog.h"
 #include "virfile.h"
 #include "virprocess.h"
 #include "virobject.h"
@@ -86,9 +86,10 @@ static void qemuMonitorDispose(void *obj);
 
 static int qemuMonitorOnceInit(void)
 {
-    if (!(qemuMonitorClass = virClassNew("qemuMonitor",
-                                          sizeof(qemuMonitor),
-                                          qemuMonitorDispose)))
+    if (!(qemuMonitorClass = virClassNew(virClassForObject(),
+                                         "qemuMonitor",
+                                         sizeof(qemuMonitor),
+                                         qemuMonitorDispose)))
         return -1;
 
     return 0;
@@ -1022,6 +1023,16 @@ int qemuMonitorEmitStop(qemuMonitorPtr mon)
 }
 
 
+int qemuMonitorEmitResume(qemuMonitorPtr mon)
+{
+    int ret = -1;
+    VIR_DEBUG("mon=%p", mon);
+
+    QEMU_MONITOR_CALLBACK(mon, ret, domainResume, mon->vm);
+    return ret;
+}
+
+
 int qemuMonitorEmitRTCChange(qemuMonitorPtr mon, long long offset)
 {
     int ret = -1;
@@ -1428,16 +1439,16 @@ qemuMonitorGetBlockInfo(qemuMonitorPtr mon)
 
 struct qemuDomainDiskInfo *
 qemuMonitorBlockInfoLookup(virHashTablePtr blockInfo,
-                           const char *devname)
+                           const char *dev)
 {
     struct qemuDomainDiskInfo *info;
 
-    VIR_DEBUG("blockInfo=%p dev=%s", blockInfo, NULLSTR(devname));
+    VIR_DEBUG("blockInfo=%p dev=%s", blockInfo, NULLSTR(dev));
 
-    if (!(info = virHashLookup(blockInfo, devname))) {
+    if (!(info = virHashLookup(blockInfo, dev))) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("cannot find info for device '%s'"),
-                       NULLSTR(devname));
+                       NULLSTR(dev));
     }
 
     return info;
@@ -2316,7 +2327,7 @@ int qemuMonitorSendFileHandle(qemuMonitorPtr mon,
     }
 
     if (!mon->hasSendFD) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED,
                        _("qemu is not using a unix socket monitor, "
                          "cannot send fd %s"), fdname);
         return -1;
@@ -2387,7 +2398,7 @@ int qemuMonitorAddHostNetwork(qemuMonitorPtr mon,
     }
 
     if (mon->json)
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor should be using AddNetdev"));
     else
         ret = qemuMonitorTextAddHostNetwork(mon, netstr);
@@ -2419,7 +2430,7 @@ int qemuMonitorRemoveHostNetwork(qemuMonitorPtr mon,
     }
 
     if (mon->json)
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor should be using RemoveNetdev"));
     else
         ret = qemuMonitorTextRemoveHostNetwork(mon, vlan, netname);
@@ -2550,7 +2561,7 @@ int qemuMonitorAttachDrive(qemuMonitorPtr mon,
     }
 
     if (mon->json)
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor should be using AddDrive"));
     else
         ret = qemuMonitorTextAttachDrive(mon, drivestr, controllerAddr, driveAddr);
@@ -2758,7 +2769,7 @@ qemuMonitorDiskSnapshot(qemuMonitorPtr mon, virJSONValuePtr actions,
                         const char *device, const char *file,
                         const char *format, bool reuse)
 {
-    int ret;
+    int ret = -1;
 
     VIR_DEBUG("mon=%p, actions=%p, device=%s, file=%s, format=%s, reuse=%d",
               mon, actions, device, file, format, reuse);
@@ -2769,17 +2780,12 @@ qemuMonitorDiskSnapshot(qemuMonitorPtr mon, virJSONValuePtr actions,
         return -1;
     }
 
-    if (mon->json) {
+    if (mon->json)
         ret = qemuMonitorJSONDiskSnapshot(mon, actions, device, file, format,
                                           reuse);
-    } else {
-        if (actions || STRNEQ(format, "qcow2") || reuse) {
-            virReportError(VIR_ERR_INVALID_ARG, "%s",
-                           _("text monitor lacks several snapshot features"));
-            return -1;
-        }
-        ret = qemuMonitorTextDiskSnapshot(mon, device, file);
-    }
+    else
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
+                       _("disk snapshot requires JSON monitor"));
     return ret;
 }
 
@@ -2811,7 +2817,7 @@ qemuMonitorDriveMirror(qemuMonitorPtr mon,
         ret = qemuMonitorJSONDriveMirror(mon, device, file, format, speed,
                                          flags);
     else
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("drive-mirror requires JSON monitor"));
     return ret;
 }
@@ -2827,7 +2833,7 @@ qemuMonitorTransaction(qemuMonitorPtr mon, virJSONValuePtr actions)
     if (mon->json)
         ret = qemuMonitorJSONTransaction(mon, actions);
     else
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("transaction requires JSON monitor"));
     return ret;
 }
@@ -2857,7 +2863,7 @@ qemuMonitorBlockCommit(qemuMonitorPtr mon, const char *device,
     if (mon->json)
         ret = qemuMonitorJSONBlockCommit(mon, device, top, base, speed);
     else
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("block-commit requires JSON monitor"));
     return ret;
 }
@@ -2876,7 +2882,7 @@ qemuMonitorDrivePivot(qemuMonitorPtr mon, const char *device,
     if (mon->json)
         ret = qemuMonitorJSONDrivePivot(mon, device, file, format);
     else
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("drive pivot requires JSON monitor"));
     return ret;
 }
@@ -2978,7 +2984,7 @@ int qemuMonitorBlockJob(qemuMonitorPtr mon,
         ret = qemuMonitorJSONBlockJob(mon, device, base, speed, info, mode,
                                       modern);
     else
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("block jobs require JSON monitor"));
     return ret;
 }
@@ -3110,7 +3116,7 @@ int qemuMonitorSystemWakeup(qemuMonitorPtr mon)
     }
 
     if (!mon->json) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor is required"));
         return -1;
     }
@@ -3134,7 +3140,7 @@ int qemuMonitorGetVersion(qemuMonitorPtr mon,
     }
 
     if (!mon->json) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor is required"));
         return -1;
     }
@@ -3155,7 +3161,7 @@ int qemuMonitorGetMachines(qemuMonitorPtr mon,
     }
 
     if (!mon->json) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor is required"));
         return -1;
     }
@@ -3185,7 +3191,7 @@ int qemuMonitorGetCPUDefinitions(qemuMonitorPtr mon,
     }
 
     if (!mon->json) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor is required"));
         return -1;
     }
@@ -3207,7 +3213,7 @@ int qemuMonitorGetCommands(qemuMonitorPtr mon,
     }
 
     if (!mon->json) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor is required"));
         return -1;
     }
@@ -3229,7 +3235,7 @@ int qemuMonitorGetEvents(qemuMonitorPtr mon,
     }
 
     if (!mon->json) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor is required"));
         return -1;
     }
@@ -3252,7 +3258,7 @@ int qemuMonitorGetKVMState(qemuMonitorPtr mon,
     }
 
     if (!mon->json) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor is required"));
         return -1;
     }
@@ -3274,7 +3280,7 @@ int qemuMonitorGetObjectTypes(qemuMonitorPtr mon,
     }
 
     if (!mon->json) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor is required"));
         return -1;
     }
@@ -3297,7 +3303,7 @@ int qemuMonitorGetObjectProps(qemuMonitorPtr mon,
     }
 
     if (!mon->json) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor is required"));
         return -1;
     }
@@ -3318,7 +3324,7 @@ char *qemuMonitorGetTargetArch(qemuMonitorPtr mon)
     }
 
     if (!mon->json) {
-        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
                        _("JSON monitor is required"));
         return NULL;
     }

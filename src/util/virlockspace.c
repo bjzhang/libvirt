@@ -22,13 +22,13 @@
 #include <config.h>
 
 #include "virlockspace.h"
-#include "logging.h"
-#include "memory.h"
-#include "virterror_internal.h"
-#include "util.h"
+#include "virlog.h"
+#include "viralloc.h"
+#include "virerror.h"
+#include "virutil.h"
 #include "virfile.h"
 #include "virhash.h"
-#include "threads.h"
+#include "virthread.h"
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -387,6 +387,7 @@ virLockSpacePtr virLockSpaceNewPostExecRestart(virJSONValuePtr object)
         if (virSetInherit(res->fd, false) < 0) {
             virReportSystemError(errno, "%s",
                                  _("Cannot enable close-on-exec flag"));
+            virLockSpaceResourceFree(res);
             goto error;
         }
         if (virJSONValueObjectGetBoolean(child, "lockHeld", &res->lockHeld) < 0) {
@@ -557,13 +558,12 @@ int virLockSpaceCreateResource(virLockSpacePtr lockspace,
 {
     int ret = -1;
     char *respath = NULL;
-    virLockSpaceResourcePtr res;
 
     VIR_DEBUG("lockspace=%p resname=%s", lockspace, resname);
 
     virMutexLock(&lockspace->lock);
 
-    if ((res = virHashLookup(lockspace->resources, resname))) {
+    if (virHashLookup(lockspace->resources, resname) != NULL) {
         virReportError(VIR_ERR_RESOURCE_BUSY,
                        _("Lockspace resource '%s' is locked"),
                        resname);
@@ -590,13 +590,12 @@ int virLockSpaceDeleteResource(virLockSpacePtr lockspace,
 {
     int ret = -1;
     char *respath = NULL;
-    virLockSpaceResourcePtr res;
 
     VIR_DEBUG("lockspace=%p resname=%s", lockspace, resname);
 
     virMutexLock(&lockspace->lock);
 
-    if ((res = virHashLookup(lockspace->resources, resname))) {
+    if (virHashLookup(lockspace->resources, resname) != NULL) {
         virReportError(VIR_ERR_RESOURCE_BUSY,
                        _("Lockspace resource '%s' is locked"),
                        resname);

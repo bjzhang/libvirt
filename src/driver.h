@@ -717,6 +717,12 @@ typedef int
                                virStreamPtr st,
                                unsigned int flags);
 typedef int
+    (*virDrvDomainOpenChannel)(virDomainPtr dom,
+                               const char *name,
+                               virStreamPtr st,
+                               unsigned int flags);
+
+typedef int
     (*virDrvDomainOpenGraphics)(virDomainPtr dom,
                                 unsigned int idx,
                                 int fd,
@@ -915,6 +921,11 @@ typedef int
                           unsigned long long minimum,
                           unsigned int flags);
 
+typedef int
+    (*virDrvDomainLxcOpenNamespace)(virDomainPtr dom,
+                                    int **fdlist,
+                                    unsigned int flags);
+
 /**
  * _virDriver:
  *
@@ -1078,6 +1089,7 @@ struct _virDriver {
     virDrvDomainQemuAttach              qemuDomainAttach;
     virDrvDomainQemuAgentCommand        qemuDomainArbitraryAgentCommand;
     virDrvDomainOpenConsole             domainOpenConsole;
+    virDrvDomainOpenChannel             domainOpenChannel;
     virDrvDomainOpenGraphics            domainOpenGraphics;
     virDrvDomainInjectNMI               domainInjectNMI;
     virDrvDomainMigrateBegin3           domainMigrateBegin3;
@@ -1107,6 +1119,7 @@ struct _virDriver {
     virDrvNodeGetCPUMap                 nodeGetCPUMap;
     virDrvDomainFSTrim                  domainFSTrim;
     virDrvDomainSendProcessSignal       domainSendProcessSignal;
+    virDrvDomainLxcOpenNamespace        domainLxcOpenNamespace;
 };
 
 typedef int
@@ -1500,10 +1513,12 @@ struct _virStorageDriver {
 };
 
 # ifdef WITH_LIBVIRTD
-typedef int (*virDrvStateInitialize) (bool privileged);
+
+typedef int (*virDrvStateInitialize) (bool privileged,
+                                      virStateInhibitCallback callback,
+                                      void *opaque);
 typedef int (*virDrvStateCleanup) (void);
 typedef int (*virDrvStateReload) (void);
-typedef int (*virDrvStateActive) (void);
 typedef int (*virDrvStateStop) (void);
 
 typedef struct _virStateDriver virStateDriver;
@@ -1514,7 +1529,6 @@ struct _virStateDriver {
     virDrvStateInitialize  initialize;
     virDrvStateCleanup     cleanup;
     virDrvStateReload      reload;
-    virDrvStateActive      active;
     virDrvStateStop        stop;
 };
 # endif

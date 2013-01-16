@@ -32,23 +32,23 @@
 #include <libxml/xmlsave.h>
 
 
-#include "virterror_internal.h"
+#include "virerror.h"
 #include "datatypes.h"
 #include "test_driver.h"
-#include "buf.h"
-#include "util.h"
-#include "uuid.h"
+#include "virbuffer.h"
+#include "virutil.h"
+#include "viruuid.h"
 #include "capabilities.h"
-#include "memory.h"
+#include "viralloc.h"
 #include "network_conf.h"
 #include "interface_conf.h"
 #include "domain_conf.h"
 #include "domain_event.h"
 #include "storage_conf.h"
 #include "node_device_conf.h"
-#include "xml.h"
-#include "threads.h"
-#include "logging.h"
+#include "virxml.h"
+#include "virthread.h"
+#include "virlog.h"
 #include "virfile.h"
 #include "virtypedparam.h"
 #include "virrandom.h"
@@ -150,7 +150,7 @@ static void testDomainObjPrivateFree(void *data)
 
 
 static int testDefaultConsoleType(const char *ostype ATTRIBUTE_UNUSED,
-                                  const char *arch ATTRIBUTE_UNUSED)
+                                  virArch arch ATTRIBUTE_UNUSED)
 {
     return VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SERIAL;
 }
@@ -163,7 +163,7 @@ testBuildCapabilities(virConnectPtr conn) {
     const char *const guest_types[] = { "hvm", "xen" };
     int i;
 
-    if ((caps = virCapabilitiesNew(TEST_MODEL, 0, 0)) == NULL)
+    if ((caps = virCapabilitiesNew(VIR_ARCH_I686, 0, 0)) == NULL)
         goto no_memory;
 
     caps->defaultConsoleTargetType = testDefaultConsoleType;
@@ -182,8 +182,7 @@ testBuildCapabilities(virConnectPtr conn) {
     for (i = 0; i < ARRAY_CARDINALITY(guest_types) ; i++) {
         if ((guest = virCapabilitiesAddGuest(caps,
                                              guest_types[i],
-                                             TEST_MODEL,
-                                             TEST_MODEL_WORDSIZE,
+                                             VIR_ARCH_I686,
                                              TEST_EMULATOR,
                                              NULL,
                                              0,
@@ -4688,6 +4687,7 @@ testStoragePoolListAllVolumes(virStoragePoolPtr obj,
             if (tmp_vols[i])
                 virStorageVolFree(tmp_vols[i]);
         }
+        VIR_FREE(tmp_vols);
     }
 
     if (pool)

@@ -22,14 +22,13 @@
 
 #include "lxc_monitor.h"
 #include "lxc_conf.h"
-#include "lxc_protocol.h"
 #include "lxc_monitor_dispatch.h"
 
-#include "memory.h"
+#include "viralloc.h"
 
-#include "virterror_internal.h"
-#include "logging.h"
-#include "threads.h"
+#include "virerror.h"
+#include "virlog.h"
+#include "virthread.h"
 #include "rpc/virnetclient.h"
 
 #define VIR_FROM_THIS VIR_FROM_LXC
@@ -51,7 +50,8 @@ static void virLXCMonitorDispose(void *obj);
 
 static int virLXCMonitorOnceInit(void)
 {
-    if (!(virLXCMonitorClass = virClassNew("virLXCMonitor",
+    if (!(virLXCMonitorClass = virClassNew(virClassForObject(),
+                                           "virLXCMonitor",
                                            sizeof(virLXCMonitor),
                                            virLXCMonitorDispose)))
         return -1;

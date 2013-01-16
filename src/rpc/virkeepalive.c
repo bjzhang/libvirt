@@ -22,12 +22,12 @@
 
 #include <config.h>
 
-#include "memory.h"
-#include "threads.h"
+#include "viralloc.h"
+#include "virthread.h"
 #include "virfile.h"
-#include "logging.h"
-#include "util.h"
-#include "virterror_internal.h"
+#include "virlog.h"
+#include "virutil.h"
+#include "virerror.h"
 #include "virnetsocket.h"
 #include "virkeepaliveprotocol.h"
 #include "virkeepalive.h"
@@ -58,7 +58,8 @@ static void virKeepAliveDispose(void *obj);
 
 static int virKeepAliveOnceInit(void)
 {
-    if (!(virKeepAliveClass = virClassNew("virKeepAlive",
+    if (!(virKeepAliveClass = virClassNew(virClassForObject(),
+                                          "virKeepAlive",
                                           sizeof(virKeepAlive),
                                           virKeepAliveDispose)))
         return -1;

@@ -26,13 +26,13 @@
 #include "virnetsshsession.h"
 
 #include "internal.h"
-#include "buf.h"
-#include "memory.h"
-#include "logging.h"
+#include "virbuffer.h"
+#include "viralloc.h"
+#include "virlog.h"
 #include "configmake.h"
-#include "threads.h"
-#include "util.h"
-#include "virterror_internal.h"
+#include "virthread.h"
+#include "virutil.h"
+#include "virerror.h"
 #include "virobject.h"
 
 #define VIR_FROM_THIS VIR_FROM_SSH
@@ -161,7 +161,8 @@ static virClassPtr virNetSSHSessionClass;
 static int
 virNetSSHSessionOnceInit(void)
 {
-    if (!(virNetSSHSessionClass = virClassNew("virNetSSHSession",
+    if (!(virNetSSHSessionClass = virClassNew(virClassForObject(),
+                                              "virNetSSHSession",
                                               sizeof(virNetSSHSession),
                                               virNetSSHSessionDispose)))
         return -1;

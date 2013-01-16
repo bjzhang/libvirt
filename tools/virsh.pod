@@ -1040,15 +1040,18 @@ I<--total> for only the total stats, I<start> for only the per-cpu
 stats of the CPUs from I<start>, I<count> for only I<count> CPUs'
 stats.
 
-=item B<migrate> [I<--live>] [I<--direct>] [I<--p2p> [I<--tunnelled>]]
+=item B<migrate> [I<--live>] [I<--offline>] [I<--direct>] [I<--p2p> [I<--tunnelled>]]
 [I<--persistent>] [I<--undefinesource>] [I<--suspend>] [I<--copy-storage-all>]
 [I<--copy-storage-inc>] [I<--change-protection>] [I<--unsafe>] [I<--verbose>]
 I<domain> I<desturi> [I<migrateuri>] [I<dname>]
 [I<--timeout> B<seconds>] [I<--xml> B<file>]
 
-Migrate domain to another host.  Add I<--live> for live migration; I<--p2p>
+Migrate domain to another host.  Add I<--live> for live migration; <--p2p>
 for peer-2-peer migration; I<--direct> for direct migration; or I<--tunnelled>
-for tunnelled migration.  I<--persistent> leaves the domain persistent on
+for tunnelled migration.  I<--offline> migrates domain definition without
+starting the domain on destination and without stopping it on source host.
+Offline migration may be used with inactive domains and it must be used with
+I<--persistent> option.  I<--persistent> leaves the domain persistent on
 destination host, I<--undefinesource> undefines the domain on the source host,
 and I<--suspend> leaves the domain paused on the destination host.
 I<--copy-storage-all> indicates migration with non-shared storage with full
@@ -2092,7 +2095,7 @@ destroy and re-start the network.
 I<command> is one of "add-first", "add-last", "add" (a synonym for
 add-last), "delete", or "modify".
 
-I<section> is one of ""bridge", "domain", "ip", "ip-dhcp-host",
+I<section> is one of "bridge", "domain", "ip", "ip-dhcp-host",
 "ip-dhcp-range", "forward", "forward-interface", "forward-pf",
 "portgroup", "dns-host", "dns-txt", or "dns-srv", each section being
 named by a concatenation of the xml element hierarchy leading to the
@@ -2405,13 +2408,17 @@ Returns the UUID of the named I<pool>.
 
 =over 4
 
-=item B<vol-create> I<pool-or-uuid> I<FILE>
+=item B<vol-create> I<pool-or-uuid> I<FILE> [I<--prealloc-metadata>]
 
 Create a volume from an XML <file>.
 I<pool-or-uuid> is the name or UUID of the storage pool to create the volume in.
 I<FILE> is the XML <file> with the volume definition. An easy way to create the
 XML <file> is to use the B<vol-dumpxml> command to obtain the definition of a
 pre-existing volume.
+[I<--prealloc-metadata>] preallocate metadata (for qcow2 images which don't
+support full allocation). This option creates a sparse image file with metadata,
+resulting in higher performance compared to images with no preallocation and
+only slightly higher initial disk space usage.
 
 B<Example>
 
@@ -2420,7 +2427,7 @@ B<Example>
  virsh vol-create differentstoragepool newvolume.xml
 
 =item B<vol-create-from> I<pool-or-uuid> I<FILE> [I<--inputpool>
-I<pool-or-uuid>] I<vol-name-or-key-or-path>
+I<pool-or-uuid>] I<vol-name-or-key-or-path> [I<--prealloc-metadata>]
 
 Create a volume, using another volume as input.
 I<pool-or-uuid> is the name or UUID of the storage pool to create the volume in.
@@ -2428,10 +2435,15 @@ I<FILE> is the XML <file> with the volume definition.
 I<--inputpool> I<pool-or-uuid> is the name or uuid of the storage pool the
 source volume is in.
 I<vol-name-or-key-or-path> is the name or key or path of the source volume.
+[I<--prealloc-metadata>] preallocate metadata (for qcow2 images which don't
+support full allocation). This option creates a sparse image file with metadata,
+resulting in higher performance compared to images with no preallocation and
+only slightly higher initial disk space usage.
 
 =item B<vol-create-as> I<pool-or-uuid> I<name> I<capacity>
 [I<--allocation> I<size>] [I<--format> I<string>] [I<--backing-vol>
 I<vol-name-or-key-or-path>] [I<--backing-vol-format> I<string>]
+[I<--prealloc-metadata>]
 
 Create a volume from a set of arguments.
 I<pool-or-uuid> is the name or UUID of the storage pool to create the volume
@@ -2448,9 +2460,13 @@ volume to be used if taking a snapshot of an existing volume.
 I<--backing-vol-format> I<string> is the format of the snapshot backing volume;
 raw, bochs, qcow, qcow2, qed, vmdk, host_device. These are, however, meant for
 file based storage pools.
+[I<--prealloc-metadata>] preallocate metadata (for qcow2 images which don't
+support full allocation). This option creates a sparse image file with metadata,
+resulting in higher performance compared to images with no preallocation and
+only slightly higher initial disk space usage.
 
 =item B<vol-clone> [I<--pool> I<pool-or-uuid>] I<vol-name-or-key-or-path>
-I<name>
+I<name> [I<--prealloc-metadata>]
 
 Clone an existing volume.  Less powerful, but easier to type, version of
 B<vol-create-from>.
@@ -2458,6 +2474,10 @@ I<--pool> I<pool-or-uuid> is the name or UUID of the storage pool to create
 the volume in.
 I<vol-name-or-key-or-path> is the name or key or path of the source volume.
 I<name> is the name of the new volume.
+[I<--prealloc-metadata>] preallocate metadata (for qcow2 images which don't
+support full allocation). This option creates a sparse image file with metadata,
+resulting in higher performance compared to images with no preallocation and
+only slightly higher initial disk space usage.
 
 =item B<vol-delete> [I<--pool> I<pool-or-uuid>] I<vol-name-or-key-or-path>
 
@@ -3035,6 +3055,14 @@ I<--timeout> requires timeout seconds I<seconds> and it must be positive.
 When I<--aysnc> is given, the command waits for timeout whether success or
 failed. And when I<--block> is given, the command waits forever with blocking
 timeout.
+
+=item B<lxc-enter-namespace> I<domain> -- /path/to/binary [arg1, [arg2, ...]]
+
+Enter the namespace of I<domain> and execute the command C</path/to/binary>
+passing the requested args. The binary path is relative to the container
+root filesystem, not the host root filesystem. The binary will inherit the
+environment variables / console visible to virsh. This command only works
+when connected to the LXC hypervisor driver.
 
 =back
 

@@ -24,11 +24,11 @@
 #include <config.h>
 
 #include "qemu_hostdev.h"
-#include "logging.h"
-#include "virterror_internal.h"
-#include "memory.h"
-#include "pci.h"
-#include "hostusb.h"
+#include "virlog.h"
+#include "virerror.h"
+#include "viralloc.h"
+#include "virpci.h"
+#include "virusb.h"
 #include "virnetdev.h"
 
 #define VIR_FROM_THIS VIR_FROM_QEMU
@@ -179,7 +179,8 @@ qemuUpdateActiveUsbHostdevs(virQEMUDriverPtr driver,
             continue;
 
         usb = usbGetDevice(hostdev->source.subsys.u.usb.bus,
-                           hostdev->source.subsys.u.usb.device);
+                           hostdev->source.subsys.u.usb.device,
+                           NULL);
         if (!usb) {
             VIR_WARN("Unable to reattach USB device %03d.%03d on domain %s",
                      hostdev->source.subsys.u.usb.bus,
@@ -457,7 +458,7 @@ int qemuPrepareHostdevPCIDevices(virQEMUDriverPtr driver,
     for (i = 0; i < pciDeviceListCount(pcidevs); i++) {
         pciDevice *dev = pciDeviceListGet(pcidevs, i);
         if (pciDeviceGetManaged(dev) &&
-            pciDettachDevice(dev, driver->activePciHostdevs, NULL) < 0)
+            pciDettachDevice(dev, driver->activePciHostdevs, NULL, "pci-stub") < 0)
             goto reattachdevs;
     }
 
@@ -491,10 +492,8 @@ int qemuPrepareHostdevPCIDevices(virQEMUDriverPtr driver,
     /* Loop 5: Now mark all the devices as active */
     for (i = 0; i < pciDeviceListCount(pcidevs); i++) {
         pciDevice *dev = pciDeviceListGet(pcidevs, i);
-        if (pciDeviceListAdd(driver->activePciHostdevs, dev) < 0) {
-            pciFreeDevice(dev);
+        if (pciDeviceListAdd(driver->activePciHostdevs, dev) < 0)
             goto inactivedevs;
-        }
     }
 
     /* Loop 6: Now remove the devices from inactive list. */
@@ -548,10 +547,8 @@ int qemuPrepareHostdevPCIDevices(virQEMUDriverPtr driver,
     }
 
     /* Loop 9: Now steal all the devices from pcidevs */
-    while (pciDeviceListCount(pcidevs) > 0) {
-        pciDevice *dev = pciDeviceListGet(pcidevs, 0);
-        pciDeviceListSteal(pcidevs, dev);
-    }
+    while (pciDeviceListCount(pcidevs) > 0)
+        pciDeviceListStealIndex(pcidevs, 0);
 
     ret = 0;
     goto cleanup;
@@ -577,7 +574,7 @@ resetvfnetconfig:
 reattachdevs:
     for (i = 0; i < pciDeviceListCount(pcidevs); i++) {
         pciDevice *dev = pciDeviceListGet(pcidevs, i);
-        pciReAttachDevice(dev, driver->activePciHostdevs, NULL);
+        pciReAttachDevice(dev, driver->activePciHostdevs, NULL, "pci-stub");
     }
 
 cleanup:
@@ -657,6 +654,7 @@ qemuFindHostdevUSBDevice(virDomainHostdevDefPtr hostdev,
 
     if (vendor && bus) {
         rc = usbFindDevice(vendor, product, bus, device,
+                           NULL,
                            autoAddress ? false : mandatory,
                            usb);
         if (rc < 0) {
@@ -677,7 +675,7 @@ qemuFindHostdevUSBDevice(virDomainHostdevDefPtr hostdev,
     if (vendor) {
         usbDeviceList *devs;
 
-        rc = usbFindDeviceByVendor(vendor, product, mandatory, &devs);
+        rc = usbFindDeviceByVendor(vendor, product, NULL, mandatory, &devs);
         if (rc < 0)
             return -1;
 
@@ -717,7 +715,7 @@ qemuFindHostdevUSBDevice(virDomainHostdevDefPtr hostdev,
                      bus, device);
         }
     } else if (!vendor && bus) {
-        if (usbFindDeviceByBus(bus, device, mandatory, usb) < 0)
+        if (usbFindDeviceByBus(bus, device, NULL, mandatory, usb) < 0)
             return -1;
     }
 
@@ -820,7 +818,8 @@ void qemuReattachPciDevice(pciDevice *dev, virQEMUDriverPtr driver)
      * successfully, it must have been inactive.
      */
     if (!pciDeviceGetManaged(dev)) {
-        pciDeviceListAdd(driver->inactivePciHostdevs, dev);
+        if (pciDeviceListAdd(driver->inactivePciHostdevs, dev) < 0)
+            pciFreeDevice(dev);
         return;
     }
 
@@ -831,12 +830,13 @@ void qemuReattachPciDevice(pciDevice *dev, virQEMUDriverPtr driver)
     }
 
     if (pciReAttachDevice(dev, driver->activePciHostdevs,
-                          driver->inactivePciHostdevs) < 0) {
+                          driver->inactivePciHostdevs, "pci-stub") < 0) {
         virErrorPtr err = virGetLastError();
         VIR_ERROR(_("Failed to re-attach PCI device: %s"),
                   err ? err->message : _("unknown error"));
         virResetError(err);
     }
+    pciFreeDevice(dev);
 }
 
 
@@ -907,8 +907,8 @@ void qemuDomainReAttachHostdevDevices(virQEMUDriverPtr driver,
         }
     }
 
-    for (i = 0; i < pciDeviceListCount(pcidevs); i++) {
-        pciDevice *dev = pciDeviceListGet(pcidevs, i);
+    while (pciDeviceListCount(pcidevs) > 0) {
+        pciDevice *dev = pciDeviceListStealIndex(pcidevs, 0);
         qemuReattachPciDevice(dev, driver);
     }
 
@@ -936,7 +936,8 @@ qemuDomainReAttachHostUsbDevices(virQEMUDriverPtr driver,
             continue;
 
         usb = usbGetDevice(hostdev->source.subsys.u.usb.bus,
-                           hostdev->source.subsys.u.usb.device);
+                           hostdev->source.subsys.u.usb.device,
+                           NULL);
 
         if (!usb) {
             VIR_WARN("Unable to reattach USB device %03d.%03d on domain %s",

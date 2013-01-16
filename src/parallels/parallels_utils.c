@@ -24,10 +24,10 @@
 
 #include <stdarg.h>
 
-#include "command.h"
-#include "virterror_internal.h"
-#include "memory.h"
-#include "json.h"
+#include "vircommand.h"
+#include "virerror.h"
+#include "viralloc.h"
+#include "virjson.h"
 
 #include "parallels_utils.h"
 

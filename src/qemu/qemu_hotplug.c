@@ -32,11 +32,11 @@
 #include "qemu_hostdev.h"
 #include "domain_audit.h"
 #include "domain_nwfilter.h"
-#include "logging.h"
+#include "virlog.h"
 #include "datatypes.h"
-#include "virterror_internal.h"
-#include "memory.h"
-#include "pci.h"
+#include "virerror.h"
+#include "viralloc.h"
+#include "virpci.h"
 #include "virfile.h"
 #include "qemu_cgroup.h"
 #include "locking/domain_lock.h"
@@ -45,7 +45,7 @@
 #include "virnetdevbridge.h"
 #include "virnetdevtap.h"
 #include "device_conf.h"
-#include "storage_file.h"
+#include "virstoragefile.h"
 
 #define VIR_FROM_THIS VIR_FROM_QEMU
 
@@ -1105,7 +1105,8 @@ int qemuDomainAttachHostUsbDevice(virQEMUDriverPtr driver,
         }
 
         if ((usb = usbGetDevice(hostdev->source.subsys.u.usb.bus,
-                                hostdev->source.subsys.u.usb.device)) == NULL)
+                                hostdev->source.subsys.u.usb.device,
+                                NULL)) == NULL)
             goto error;
 
         data.vm = vm;
@@ -1173,7 +1174,7 @@ int qemuDomainAttachHostDevice(virQEMUDriverPtr driver,
     }
 
     if (virSecurityManagerSetHostdevLabel(driver->securityManager,
-                                          vm->def, hostdev) < 0)
+                                          vm->def, hostdev, NULL) < 0)
         goto cleanup;
 
     switch (hostdev->source.subsys.type) {
@@ -1201,7 +1202,7 @@ int qemuDomainAttachHostDevice(virQEMUDriverPtr driver,
 
 error:
     if (virSecurityManagerRestoreHostdevLabel(driver->securityManager,
-                                              vm->def, hostdev) < 0)
+                                              vm->def, hostdev, NULL) < 0)
         VIR_WARN("Unable to restore host device labelling on hotplug fail");
 
 cleanup:
@@ -1268,13 +1269,13 @@ qemuDomainNetGetBridgeName(virConnectPtr conn, virDomainNetDefPtr net)
         virNetworkFree(network);
         virSetError(errobj);
         virFreeError(errobj);
-        goto cleanup;
 
+    } else {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("Interface type %d has no bridge name"),
+                       virDomainNetGetActualType(net));
     }
 
-    virReportError(VIR_ERR_INTERNAL_ERROR,
-                   _("Network type %d is not supported"),
-                   virDomainNetGetActualType(net));
 cleanup:
     return brname;
 }
@@ -1306,8 +1307,14 @@ qemuDomainChangeNetBridge(virConnectPtr conn,
     if (oldbridge) {
         ret = virNetDevBridgeRemovePort(oldbridge, olddev->ifname);
         virDomainAuditNet(vm, olddev, NULL, "detach", ret == 0);
-        if (ret < 0)
-            goto cleanup;
+        if (ret < 0) {
+            /* warn but continue - possibly the old network
+             * had been destroyed and reconstructed, leaving the
+             * tap device orphaned.
+             */
+            VIR_WARN("Unable to detach device %s from bridge %s",
+                     olddev->ifname, oldbridge);
+        }
     }
 
     ret = virNetDevBridgeAddPort(newbridge, olddev->ifname);
@@ -1328,6 +1335,43 @@ cleanup:
     VIR_FREE(oldbridge);
     VIR_FREE(newbridge);
     return ret;
+}
+
+static int
+qemuDomainChangeNetFilter(virConnectPtr conn,
+                          virDomainObjPtr vm,
+                          virDomainNetDefPtr olddev,
+                          virDomainNetDefPtr newdev)
+{
+    /* make sure this type of device supports filters. */
+    switch (virDomainNetGetActualType(newdev)) {
+    case VIR_DOMAIN_NET_TYPE_ETHERNET:
+    case VIR_DOMAIN_NET_TYPE_BRIDGE:
+    case VIR_DOMAIN_NET_TYPE_NETWORK:
+        break;
+    default:
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED,
+                       _("filters not supported on interfaces of type %s"),
+                       virDomainNetTypeToString(virDomainNetGetActualType(newdev)));
+        return -1;
+    }
+
+    virDomainConfNWFilterTeardown(olddev);
+
+    if (virDomainConfNWFilterInstantiate(conn, vm->def->uuid, newdev) < 0) {
+        virErrorPtr errobj;
+
+        virReportError(VIR_ERR_OPERATION_FAILED,
+                       _("failed to add new filter rules to '%s' "
+                         "- attempting to restore old rules"),
+                       olddev->ifname);
+        errobj = virSaveLastError();
+        ignore_value(virDomainConfNWFilterInstantiate(conn, vm->def->uuid, olddev));
+        virSetError(errobj);
+        virFreeError(errobj);
+        return -1;
+    }
+    return 0;
 }
 
 int qemuDomainChangeNetLinkState(virQEMUDriverPtr driver,
@@ -1373,6 +1417,7 @@ qemuDomainChangeNet(virQEMUDriverPtr driver,
     int oldType, newType;
     bool needReconnect = false;
     bool needBridgeChange = false;
+    bool needFilterChange = false;
     bool needLinkStateChange = false;
     bool needReplaceDevDef = false;
     int ret = -1;
@@ -1506,8 +1551,10 @@ qemuDomainChangeNet(virQEMUDriverPtr driver,
     }
     /* (end of device info checks) */
 
-    if (STRNEQ_NULLABLE(olddev->filter, newdev->filter))
-        needReconnect = true;
+    if (STRNEQ_NULLABLE(olddev->filter, newdev->filter) ||
+        !virNWFilterHashTableEqual(olddev->filterparams, newdev->filterparams)) {
+        needFilterChange = true;
+    }
 
     /* bandwidth can be modified, and will be checked later */
     /* vlan can be modified, and will be checked later */
@@ -1665,7 +1712,16 @@ qemuDomainChangeNet(virQEMUDriverPtr driver,
             goto cleanup;
         /* we successfully switched to the new bridge, and we've
          * determined that the rest of newdev is equivalent to olddev,
-         * so move newdev into place, so that the  */
+         * so move newdev into place */
+        needReplaceDevDef = true;
+    }
+
+    if (needFilterChange) {
+        if (qemuDomainChangeNetFilter(dom->conn, vm, olddev, newdev) < 0)
+            goto cleanup;
+        /* we successfully switched to the new filter, and we've
+         * determined that the rest of newdev is equivalent to olddev,
+         * so move newdev into place */
         needReplaceDevDef = true;
     }
 
@@ -2339,7 +2395,7 @@ qemuDomainDetachHostUsbDevice(virQEMUDriverPtr driver,
     if (ret < 0)
         return -1;
 
-    usb = usbGetDevice(subsys->u.usb.bus, subsys->u.usb.device);
+    usb = usbGetDevice(subsys->u.usb.bus, subsys->u.usb.device, NULL);
     if (usb) {
         usbDeviceListDel(driver->activeUsbHostdevs, usb);
         usbFreeDevice(usb);
@@ -2390,7 +2446,7 @@ int qemuDomainDetachThisHostDevice(virQEMUDriverPtr driver,
 
     if (!ret) {
         if (virSecurityManagerRestoreHostdevLabel(driver->securityManager,
-                                                  vm->def, detach) < 0) {
+                                                  vm->def, detach, NULL) < 0) {
             VIR_WARN("Failed to restore host device labelling");
         }
         virDomainHostdevRemove(vm->def, idx);

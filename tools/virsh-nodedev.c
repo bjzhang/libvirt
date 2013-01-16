@@ -32,10 +32,10 @@
 #include <libxml/xmlsave.h>
 
 #include "internal.h"
-#include "buf.h"
-#include "memory.h"
-#include "util.h"
-#include "xml.h"
+#include "virbuffer.h"
+#include "viralloc.h"
+#include "virutil.h"
+#include "virxml.h"
 #include "conf/node_device_conf.h"
 
 /*

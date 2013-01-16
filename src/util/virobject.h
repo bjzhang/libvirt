@@ -23,12 +23,16 @@
 # define __VIR_OBJECT_H__
 
 # include "internal.h"
+# include "virthread.h"
 
 typedef struct _virClass virClass;
 typedef virClass *virClassPtr;
 
 typedef struct _virObject virObject;
 typedef virObject *virObjectPtr;
+
+typedef struct _virObjectLockable virObjectLockable;
+typedef virObjectLockable *virObjectLockablePtr;
 
 typedef void (*virObjectDisposeCallback)(void *obj);
 
@@ -38,13 +42,27 @@ struct _virObject {
     virClassPtr klass;
 };
 
-virClassPtr virClassNew(const char *name,
+struct _virObjectLockable {
+    virObject parent;
+    virMutex lock;
+};
+
+
+virClassPtr virClassForObject(void);
+virClassPtr virClassForObjectLockable(void);
+
+virClassPtr virClassNew(virClassPtr parent,
+                        const char *name,
                         size_t objectSize,
                         virObjectDisposeCallback dispose)
     ATTRIBUTE_NONNULL(1);
 
 const char *virClassName(virClassPtr klass)
     ATTRIBUTE_NONNULL(1);
+
+bool virClassIsDerivedFrom(virClassPtr klass,
+                           virClassPtr parent)
+    ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2);
 
 void *virObjectNew(virClassPtr klass)
     ATTRIBUTE_NONNULL(1);
@@ -56,5 +74,14 @@ bool virObjectIsClass(void *obj,
     ATTRIBUTE_NONNULL(2);
 
 void virObjectFreeCallback(void *opaque);
+
+void *virObjectLockableNew(virClassPtr klass)
+    ATTRIBUTE_NONNULL(1);
+
+void virObjectLock(void *lockableobj)
+    ATTRIBUTE_NONNULL(1);
+void virObjectUnlock(void *lockableobj)
+    ATTRIBUTE_NONNULL(1);
+
 
 #endif /* __VIR_OBJECT_H */

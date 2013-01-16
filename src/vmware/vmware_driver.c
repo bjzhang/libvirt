@@ -24,13 +24,13 @@
 #include <fcntl.h>
 
 #include "internal.h"
-#include "virterror_internal.h"
+#include "virerror.h"
 #include "datatypes.h"
 #include "virfile.h"
-#include "memory.h"
-#include "util.h"
-#include "uuid.h"
-#include "command.h"
+#include "viralloc.h"
+#include "virutil.h"
+#include "viruuid.h"
+#include "vircommand.h"
 #include "vmx.h"
 #include "vmware_conf.h"
 #include "vmware_driver.h"
@@ -949,7 +949,7 @@ static void vmwareDomainObjListUpdateDomain(void *payload, const void *name ATTR
     struct vmware_driver *driver = data;
     virDomainObjPtr vm = payload;
     virDomainObjLock(vm);
-    vmwareUpdateVMStatus(driver, vm);
+    ignore_value(vmwareUpdateVMStatus(driver, vm));
     virDomainObjUnlock(vm);
 }
 

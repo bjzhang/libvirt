@@ -24,11 +24,10 @@
 
 #include "virnetclientstream.h"
 #include "virnetclient.h"
-#include "memory.h"
-#include "virterror_internal.h"
-#include "logging.h"
-#include "event.h"
-#include "threads.h"
+#include "viralloc.h"
+#include "virerror.h"
+#include "virlog.h"
+#include "virthread.h"
 
 #define VIR_FROM_THIS VIR_FROM_RPC
 
@@ -69,7 +68,8 @@ static void virNetClientStreamDispose(void *obj);
 
 static int virNetClientStreamOnceInit(void)
 {
-    if (!(virNetClientStreamClass = virClassNew("virNetClientStream",
+    if (!(virNetClientStreamClass = virClassNew(virClassForObject(),
+                                                "virNetClientStream",
                                                 sizeof(virNetClientStream),
                                                 virNetClientStreamDispose)))
         return -1;

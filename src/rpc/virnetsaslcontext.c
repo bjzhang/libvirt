@@ -25,10 +25,10 @@
 #include "virnetsaslcontext.h"
 #include "virnetmessage.h"
 
-#include "virterror_internal.h"
-#include "memory.h"
-#include "threads.h"
-#include "logging.h"
+#include "virerror.h"
+#include "viralloc.h"
+#include "virthread.h"
+#include "virlog.h"
 
 #define VIR_FROM_THIS VIR_FROM_RPC
 
@@ -55,12 +55,14 @@ static void virNetSASLSessionDispose(void *obj);
 
 static int virNetSASLContextOnceInit(void)
 {
-    if (!(virNetSASLContextClass = virClassNew("virNetSASLContext",
+    if (!(virNetSASLContextClass = virClassNew(virClassForObject(),
+                                               "virNetSASLContext",
                                                sizeof(virNetSASLContext),
                                                virNetSASLContextDispose)))
         return -1;
 
-    if (!(virNetSASLSessionClass = virClassNew("virNetSASLSession",
+    if (!(virNetSASLSessionClass = virClassNew(virClassForObject(),
+                                               "virNetSASLSession",
                                                sizeof(virNetSASLSession),
                                                virNetSASLSessionDispose)))
         return -1;

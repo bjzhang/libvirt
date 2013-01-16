@@ -34,10 +34,10 @@
 
 #include "qemu_agent.h"
 #include "qemu_command.h"
-#include "memory.h"
-#include "logging.h"
-#include "virterror_internal.h"
-#include "json.h"
+#include "viralloc.h"
+#include "virlog.h"
+#include "virerror.h"
+#include "virjson.h"
 #include "virfile.h"
 #include "virprocess.h"
 #include "virtime.h"
@@ -121,7 +121,8 @@ static void qemuAgentDispose(void *obj);
 
 static int qemuAgentOnceInit(void)
 {
-    if (!(qemuAgentClass = virClassNew("qemuAgent",
+    if (!(qemuAgentClass = virClassNew(virClassForObject(),
+                                       "qemuAgent",
                                        sizeof(qemuAgent),
                                        qemuAgentDispose)))
         return -1;

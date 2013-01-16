@@ -14,7 +14,12 @@ General tips for contributing patches
 (1) Discuss any large changes on the mailing list first. Post patches early and
 listen to feedback.
 
-(2) Post patches in unified diff format. A command similar to this should work:
+(2) Post patches in unified diff format, with git rename detection enabled. You
+need a one-time setup of:
+
+  git config diff.renames true
+
+After that, a command similar to this should work:
 
   diff -urp libvirt.orig/ libvirt.modified/ > libvirt-myfeature.patch
 
@@ -22,7 +27,9 @@ or:
 
   git diff > libvirt-myfeature.patch
 
-However, the usual workflow of libvirt developer is:
+Also, for code motion patches, you may find that "git diff --patience"
+provides an easier-to-read patch. However, the usual workflow of libvirt
+developer is:
 
   git checkout master
   git pull
@@ -58,7 +65,19 @@ though).
 
 
 
-(3) Split large changes into a series of smaller patches, self-contained if
+(3) In your commit message, make the summary line reasonably short (60 characters
+is typical), followed by a blank line, followed by any longer description of
+why your patch makes sense. If the patch fixes a regression, and you know what
+commit introduced the problem, mentioning that is useful. If the patch
+resolves a bugzilla report, mentioning the URL of the bug number is useful;
+but also summarize the issue rather than making all readers follow the link.
+You can use 'git shortlog -30' to get an idea of typical summary lines.
+Libvirt does not currently attach any meaning to Signed-off-by: lines, so it
+is up to you if you want to include or omit them in the commit message.
+
+
+
+(4) Split large changes into a series of smaller patches, self-contained if
 possible, with an explanation of each patch and an explanation of how the
 sequence of patches fits together. Moreover, please keep in mind that it's
 required to be able to compile cleanly (*including* "make check" and "make
@@ -69,10 +88,10 @@ things).
 
 
 
-(4) Make sure your patches apply against libvirt GIT. Developers only follow GIT
+(5) Make sure your patches apply against libvirt GIT. Developers only follow GIT
 and don't care much about released versions.
 
-(5) Run the automated tests on your code before submitting any changes. In
+(6) Run the automated tests on your code before submitting any changes. In
 particular, configure with compile warnings set to -Werror. This is done
 automatically for a git checkout; from a tarball, use:
 
@@ -97,7 +116,13 @@ Also, individual tests can be run from inside the "tests/" directory, like:
 
   ./qemuxml2xmltest
 
-(6) Update tests and/or documentation, particularly if you are adding a new
+There is also a "./run" script at the top level, to make it easier to run
+programs that have not yet been installed, as well as to wrap invocations of
+various tests under gdb or valgrind.
+
+
+
+(7) Update tests and/or documentation, particularly if you are adding a new
 feature or changing the output of a program.
 
 
@@ -664,7 +689,7 @@ stick to the following general plan for all *.c source files:
   #include <string.h>
   #include <limits.h>
 
-  #if HAVE_NUMACTL                Some system includes aren't supported
+  #if WITH_NUMACTL                Some system includes aren't supported
   # include <numa.h>              everywhere so need these #if guards.
   #endif
 

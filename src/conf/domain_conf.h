@@ -32,22 +32,22 @@
 # include "capabilities.h"
 # include "storage_encryption_conf.h"
 # include "cpu_conf.h"
-# include "util.h"
-# include "threads.h"
+# include "virutil.h"
+# include "virthread.h"
 # include "virhash.h"
 # include "virsocketaddr.h"
 # include "nwfilter_params.h"
 # include "nwfilter_conf.h"
 # include "virnetdevmacvlan.h"
-# include "sysinfo.h"
+# include "virsysinfo.h"
 # include "virnetdevvportprofile.h"
 # include "virnetdevopenvswitch.h"
 # include "virnetdevbandwidth.h"
 # include "virnetdevvlan.h"
 # include "virobject.h"
 # include "device_conf.h"
-# include "bitmap.h"
-# include "storage_file.h"
+# include "virbitmap.h"
+# include "virstoragefile.h"
 
 /* forward declarations of all device types, required by
  * virDomainDeviceDef
@@ -383,6 +383,29 @@ struct _virDomainHostdevSubsys {
     } u;
 };
 
+
+enum virDomainHostdevCapsType {
+    VIR_DOMAIN_HOSTDEV_CAPS_TYPE_STORAGE,
+    VIR_DOMAIN_HOSTDEV_CAPS_TYPE_MISC,
+
+    VIR_DOMAIN_HOSTDEV_CAPS_TYPE_LAST
+};
+
+typedef struct _virDomainHostdevCaps virDomainHostdevCaps;
+typedef virDomainHostdevCaps *virDomainHostdevCapsPtr;
+struct _virDomainHostdevCaps {
+    int type; /* enum virDOmainHostdevCapsType */
+    union {
+        struct {
+            char *block;
+        } storage;
+        struct {
+            char *chardev;
+        } misc;
+    } u;
+};
+
+
 /* basic device for direct passthrough */
 struct _virDomainHostdevDef {
     virDomainDeviceDef parent; /* higher level Def containing this */
@@ -392,12 +415,7 @@ struct _virDomainHostdevDef {
     unsigned int missing : 1;
     union {
         virDomainHostdevSubsys subsys;
-        struct {
-            /* TBD: struct capabilities see:
-             * https://www.redhat.com/archives/libvir-list/2008-July/msg00429.html
-             */
-            int dummy;
-        } caps;
+        virDomainHostdevCaps caps;
     } source;
     virDomainHostdevOrigStates origstates;
     virDomainDeviceInfoPtr info; /* Guest address */
@@ -548,6 +566,14 @@ enum virDomainDiskSecretType {
     VIR_DOMAIN_DISK_SECRET_TYPE_LAST
 };
 
+enum virDomainDiskSGIO {
+    VIR_DOMAIN_DISK_SGIO_DEFAULT = 0,
+    VIR_DOMAIN_DISK_SGIO_FILTERED,
+    VIR_DOMAIN_DISK_SGIO_UNFILTERED,
+
+    VIR_DOMAIN_DISK_SGIO_LAST
+};
+
 typedef struct _virDomainBlockIoTuneInfo virDomainBlockIoTuneInfo;
 struct _virDomainBlockIoTuneInfo {
     unsigned long long total_bytes_sec;
@@ -602,6 +628,8 @@ struct _virDomainDiskDef {
 
     char *serial;
     char *wwn;
+    char *vendor;
+    char *product;
     int cachemode;
     int error_policy;  /* enum virDomainDiskErrorPolicy */
     int rerror_policy; /* enum virDomainDiskErrorPolicy */
@@ -618,6 +646,7 @@ struct _virDomainDiskDef {
     virStorageEncryptionPtr encryption;
     bool rawio_specified;
     int rawio; /* no = 0, yes = 1 */
+    int sgio; /* enum virDomainDiskSGIO */
 
     size_t nseclabels;
     virSecurityDeviceLabelDefPtr *seclabels;
@@ -807,6 +836,7 @@ struct _virDomainActualNetDef {
     virNetDevVPortProfilePtr virtPortProfile;
     virNetDevBandwidthPtr bandwidth;
     virNetDevVlan vlan;
+    unsigned int class_id; /* class ID for bandwidth 'floor' */
 };
 
 /* Stores the virtual network interface configuration */
@@ -888,6 +918,13 @@ enum virDomainChrDeviceType {
     VIR_DOMAIN_CHR_DEVICE_TYPE_LAST
 };
 
+enum virDomainChrSerialTargetType {
+    VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_ISA = 0,
+    VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_USB,
+
+    VIR_DOMAIN_CHR_SERIAL_TARGET_TYPE_LAST
+};
+
 enum virDomainChrChannelTargetType {
     VIR_DOMAIN_CHR_CHANNEL_TARGET_TYPE_NONE = 0,
     VIR_DOMAIN_CHR_CHANNEL_TARGET_TYPE_GUESTFWD,
@@ -903,6 +940,8 @@ enum virDomainChrConsoleTargetType {
     VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_VIRTIO,
     VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_LXC,
     VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_OPENVZ,
+    VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SCLP,
+    VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SCLPLM,
 
     VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_LAST
 };
@@ -973,6 +1012,8 @@ struct _virDomainChrSourceDef {
 /* A complete character device, both host and domain views.  */
 struct _virDomainChrDef {
     int deviceType;
+
+    bool targetTypeAttr;
     int targetType;
     union {
         int port; /* parallel, serial, console */
@@ -1118,6 +1159,7 @@ struct _virDomainVideoDef {
     int type;
     unsigned int vram;
     unsigned int heads;
+    bool primary;
     virDomainVideoAccelDefPtr accel;
     virDomainDeviceInfo info;
 };
@@ -1477,7 +1519,7 @@ typedef struct _virDomainOSDef virDomainOSDef;
 typedef virDomainOSDef *virDomainOSDefPtr;
 struct _virDomainOSDef {
     char *type;
-    char *arch;
+    virArch arch;
     char *machine;
     size_t nBootDevs;
     int bootDevs[VIR_DOMAIN_BOOT_LAST];
@@ -2210,6 +2252,7 @@ VIR_ENUM_DECL(virDomainDiskProtocol)
 VIR_ENUM_DECL(virDomainDiskProtocolTransport)
 VIR_ENUM_DECL(virDomainDiskIo)
 VIR_ENUM_DECL(virDomainDiskSecretType)
+VIR_ENUM_DECL(virDomainDiskSGIO)
 VIR_ENUM_DECL(virDomainDiskTray)
 VIR_ENUM_DECL(virDomainIoEventFd)
 VIR_ENUM_DECL(virDomainVirtioEventIdx)
@@ -2228,6 +2271,7 @@ VIR_ENUM_DECL(virDomainNetInterfaceLinkState)
 VIR_ENUM_DECL(virDomainChrDevice)
 VIR_ENUM_DECL(virDomainChrChannelTarget)
 VIR_ENUM_DECL(virDomainChrConsoleTarget)
+VIR_ENUM_DECL(virDomainChrSerialTarget)
 VIR_ENUM_DECL(virDomainSmartcard)
 VIR_ENUM_DECL(virDomainChr)
 VIR_ENUM_DECL(virDomainChrTcpProtocol)
@@ -2242,6 +2286,7 @@ VIR_ENUM_DECL(virDomainWatchdogAction)
 VIR_ENUM_DECL(virDomainVideo)
 VIR_ENUM_DECL(virDomainHostdevMode)
 VIR_ENUM_DECL(virDomainHostdevSubsys)
+VIR_ENUM_DECL(virDomainHostdevCaps)
 VIR_ENUM_DECL(virDomainPciRombarMode)
 VIR_ENUM_DECL(virDomainHub)
 VIR_ENUM_DECL(virDomainRedirdevBus)

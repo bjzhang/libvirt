@@ -26,13 +26,13 @@
 
 #include "qemumonitortestutils.h"
 
-#include "threads.h"
+#include "virthread.h"
 #include "qemu/qemu_monitor.h"
 #include "rpc/virnetsocket.h"
-#include "memory.h"
-#include "util.h"
-#include "logging.h"
-#include "virterror_internal.h"
+#include "viralloc.h"
+#include "virutil.h"
+#include "virlog.h"
+#include "virerror.h"
 
 #define VIR_FROM_THIS VIR_FROM_NONE
 

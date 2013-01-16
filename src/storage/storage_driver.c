@@ -36,15 +36,15 @@
 #include <errno.h>
 #include <string.h>
 
-#include "virterror_internal.h"
+#include "virerror.h"
 #include "datatypes.h"
 #include "driver.h"
-#include "util.h"
+#include "virutil.h"
 #include "storage_driver.h"
 #include "storage_conf.h"
-#include "memory.h"
+#include "viralloc.h"
 #include "storage_backend.h"
-#include "logging.h"
+#include "virlog.h"
 #include "virfile.h"
 #include "fdstream.h"
 #include "configmake.h"
@@ -128,7 +128,9 @@ storageDriverAutostart(virStorageDriverStatePtr driver) {
  * Initialization function for the QEmu daemon
  */
 static int
-storageDriverStartup(bool privileged)
+storageDriverStartup(bool privileged,
+                     virStateInhibitCallback callback ATTRIBUTE_UNUSED,
+                     void *opaque ATTRIBUTE_UNUSED)
 {
     char *base = NULL;
 
@@ -202,33 +204,6 @@ storageDriverReload(void) {
     return 0;
 }
 
-/**
- * virStorageActive:
- *
- * Checks if the storage driver is active, i.e. has an active pool
- *
- * Returns 1 if active, 0 otherwise
- */
-static int
-storageDriverActive(void) {
-    unsigned int i;
-    int active = 0;
-
-    if (!driverState)
-        return 0;
-
-    storageDriverLock(driverState);
-
-    for (i = 0 ; i < driverState->pools.count ; i++) {
-        virStoragePoolObjLock(driverState->pools.objs[i]);
-        if (virStoragePoolObjIsActive(driverState->pools.objs[i]))
-            active = 1;
-        virStoragePoolObjUnlock(driverState->pools.objs[i]);
-    }
-
-    storageDriverUnlock(driverState);
-    return active;
-}
 
 /**
  * virStorageShutdown:
@@ -1222,6 +1197,7 @@ storagePoolListAllVolumes(virStoragePoolPtr pool,
             if (tmp_vols[i])
                 virStorageVolFree(tmp_vols[i]);
         }
+        VIR_FREE(tmp_vols);
     }
 
     if (obj)
@@ -1373,7 +1349,7 @@ storageVolumeCreateXML(virStoragePoolPtr obj,
     virStorageVolDefPtr voldef = NULL;
     virStorageVolPtr ret = NULL, volobj = NULL;
 
-    virCheckFlags(0, NULL);
+    virCheckFlags(VIR_STORAGE_VOL_CREATE_PREALLOC_METADATA, NULL);
 
     storageDriverLock(driver);
     pool = virStoragePoolObjFindByUUID(&driver->pools, obj->uuid);
@@ -1450,7 +1426,7 @@ storageVolumeCreateXML(virStoragePoolPtr obj,
         voldef->building = 1;
         virStoragePoolObjUnlock(pool);
 
-        buildret = backend->buildVol(obj->conn, pool, buildvoldef);
+        buildret = backend->buildVol(obj->conn, pool, buildvoldef, flags);
 
         storageDriverLock(driver);
         virStoragePoolObjLock(pool);
@@ -1498,7 +1474,7 @@ storageVolumeCreateXMLFrom(virStoragePoolPtr obj,
     virStorageVolPtr ret = NULL, volobj = NULL;
     int buildret;
 
-    virCheckFlags(0, NULL);
+    virCheckFlags(VIR_STORAGE_VOL_CREATE_PREALLOC_METADATA, NULL);
 
     storageDriverLock(driver);
     pool = virStoragePoolObjFindByUUID(&driver->pools, obj->uuid);
@@ -2445,7 +2421,6 @@ static virStateDriver stateDriver = {
     .initialize = storageDriverStartup,
     .cleanup = storageDriverShutdown,
     .reload = storageDriverReload,
-    .active = storageDriverActive,
 };
 
 int storageRegister(void) {

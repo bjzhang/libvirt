@@ -39,8 +39,8 @@
 #include <fcntl.h>
 #include <xen/dom0_ops.h>
 
-#include "virterror_internal.h"
-#include "logging.h"
+#include "virerror.h"
+#include "virlog.h"
 #include "datatypes.h"
 #include "xen_driver.h"
 
@@ -53,20 +53,22 @@
 #if WITH_XEN_INOTIFY
 # include "xen_inotify.h"
 #endif
-#include "xml.h"
-#include "util.h"
-#include "memory.h"
+#include "virxml.h"
+#include "virutil.h"
+#include "viralloc.h"
 #include "node_device_conf.h"
-#include "pci.h"
-#include "uuid.h"
+#include "virpci.h"
+#include "viruuid.h"
 #include "fdstream.h"
 #include "virfile.h"
 #include "viruri.h"
-#include "command.h"
+#include "vircommand.h"
 #include "virnodesuspend.h"
 #include "nodeinfo.h"
+#include "configmake.h"
 
 #define VIR_FROM_THIS VIR_FROM_XEN
+#define XEN_SAVE_DIR LOCALSTATEDIR "/lib/libvirt/xen/save"
 
 static int
 xenUnifiedNodeGetInfo(virConnectPtr conn, virNodeInfoPtr info);
@@ -201,7 +203,9 @@ done:
 #ifdef WITH_LIBVIRTD
 
 static int
-xenInitialize(bool privileged ATTRIBUTE_UNUSED)
+xenInitialize(bool privileged ATTRIBUTE_UNUSED,
+              virStateInhibitCallback callback ATTRIBUTE_UNUSED,
+              void *opaque ATTRIBUTE_UNUSED)
 {
     inside_daemon = true;
     return 0;
@@ -267,6 +271,7 @@ xenUnifiedOpen(virConnectPtr conn, virConnectAuthPtr auth, unsigned int flags)
 {
     int i, ret = VIR_DRV_OPEN_DECLINED;
     xenUnifiedPrivatePtr priv;
+    char ebuf[1024];
 
 #ifdef __sun
     /*
@@ -406,6 +411,17 @@ xenUnifiedOpen(virConnectPtr conn, virConnectAuthPtr auth, unsigned int flags)
     }
 #endif
 
+    if (virAsprintf(&priv->saveDir, "%s", XEN_SAVE_DIR) == -1) {
+        virReportOOMError();
+        goto fail;
+    }
+
+    if (virFileMakePath(priv->saveDir) < 0) {
+        VIR_ERROR(_("Failed to create save dir '%s': %s"), priv->saveDir,
+                  virStrerror(errno, ebuf, sizeof(ebuf)));
+        goto fail;
+    }
+
     return VIR_DRV_OPEN_SUCCESS;
 
 fail:
@@ -416,6 +432,7 @@ clean:
         if (priv->opened[i])
             drivers[i]->xenClose(conn);
     virMutexDestroy(&priv->lock);
+    VIR_FREE(priv->saveDir);
     VIR_FREE(priv);
     conn->privateData = NULL;
     return ret;
@@ -437,6 +454,7 @@ xenUnifiedClose(virConnectPtr conn)
         if (priv->opened[i])
             drivers[i]->xenClose(conn);
 
+    VIR_FREE(priv->saveDir);
     virMutexDestroy(&priv->lock);
     VIR_FREE(conn->privateData);
 
@@ -1080,6 +1098,77 @@ xenUnifiedDomainSave(virDomainPtr dom, const char *to)
     return xenUnifiedDomainSaveFlags(dom, to, NULL, 0);
 }
 
+static char *
+xenUnifiedDomainManagedSavePath(xenUnifiedPrivatePtr priv, virDomainPtr dom)
+{
+    char *ret;
+
+    if (virAsprintf(&ret, "%s/%s.save", priv->saveDir, dom->name) < 0) {
+        virReportOOMError();
+        return NULL;
+    }
+
+    VIR_DEBUG("managed save image: %s", ret);
+    return ret;
+}
+
+static int
+xenUnifiedDomainManagedSave(virDomainPtr dom, unsigned int flags)
+{
+    GET_PRIVATE(dom->conn);
+    char *name;
+    int ret = -1;
+
+    virCheckFlags(0, -1);
+
+    name = xenUnifiedDomainManagedSavePath(priv, dom);
+    if (!name)
+        goto cleanup;
+
+    if (priv->opened[XEN_UNIFIED_XEND_OFFSET])
+        ret = xenDaemonDomainSave(dom, name);
+
+cleanup:
+    VIR_FREE(name);
+    return ret;
+}
+
+static int
+xenUnifiedDomainHasManagedSaveImage(virDomainPtr dom, unsigned int flags)
+{
+    GET_PRIVATE(dom->conn);
+    char *name;
+    int ret = -1;
+
+    virCheckFlags(0, -1);
+
+    name = xenUnifiedDomainManagedSavePath(priv, dom);
+    if (!name)
+        return ret;
+
+    ret = virFileExists(name);
+    VIR_FREE(name);
+    return ret;
+}
+
+static int
+xenUnifiedDomainManagedSaveRemove(virDomainPtr dom, unsigned int flags)
+{
+    GET_PRIVATE(dom->conn);
+    char *name;
+    int ret = -1;
+
+    virCheckFlags(0, -1);
+
+    name = xenUnifiedDomainManagedSavePath(priv, dom);
+    if (!name)
+        return ret;
+
+    ret = unlink(name);
+    VIR_FREE(name);
+    return ret;
+}
+
 static int
 xenUnifiedDomainRestoreFlags(virConnectPtr conn, const char *from,
                              const char *dxml, unsigned int flags)
@@ -1164,17 +1253,17 @@ static int
 xenUnifiedDomainSetVcpus(virDomainPtr dom, unsigned int nvcpus)
 {
     unsigned int flags = VIR_DOMAIN_VCPU_LIVE;
-    xenUnifiedPrivatePtr priv;
 
     /* Per the documented API, it is hypervisor-dependent whether this
      * affects just _LIVE or _LIVE|_CONFIG; in xen's case, that
      * depends on xendConfigVersion.  */
     if (dom) {
-        priv = dom->conn->privateData;
+        GET_PRIVATE(dom->conn);
         if (priv->xendConfigVersion >= XEND_CONFIG_VERSION_3_0_4)
             flags |= VIR_DOMAIN_VCPU_CONFIG;
+        return xenUnifiedDomainSetVcpusFlags(dom, nvcpus, flags);
     }
-    return xenUnifiedDomainSetVcpusFlags(dom, nvcpus, flags);
+    return -1;
 }
 
 static int
@@ -1505,15 +1594,35 @@ xenUnifiedDomainCreateWithFlags(virDomainPtr dom, unsigned int flags)
 {
     GET_PRIVATE(dom->conn);
     int i;
+    int ret = -1;
+    char *name = NULL;
 
     virCheckFlags(0, -1);
 
-    for (i = 0; i < XEN_UNIFIED_NR_DRIVERS; ++i)
-        if (priv->opened[i] && drivers[i]->xenDomainCreate &&
-            drivers[i]->xenDomainCreate(dom) == 0)
-            return 0;
+    name = xenUnifiedDomainManagedSavePath(priv, dom);
+    if (!name)
+        goto cleanup;
 
-    return -1;
+    if (virFileExists(name)) {
+        if (priv->opened[XEN_UNIFIED_XEND_OFFSET]) {
+            ret = xenDaemonDomainRestore(dom->conn, name);
+            if (ret == 0)
+                unlink(name);
+        }
+        goto cleanup;
+    }
+
+    for (i = 0; i < XEN_UNIFIED_NR_DRIVERS; ++i) {
+        if (priv->opened[i] && drivers[i]->xenDomainCreate &&
+            drivers[i]->xenDomainCreate(dom) == 0) {
+            ret = 0;
+            goto cleanup;
+        }
+    }
+
+cleanup:
+    VIR_FREE(name);
+    return ret;
 }
 
 static int
@@ -2004,7 +2113,7 @@ xenUnifiedNodeDeviceDettach(virNodeDevicePtr dev)
     if (!pci)
         return -1;
 
-    if (pciDettachDevice(pci, NULL, NULL) < 0)
+    if (pciDettachDevice(pci, NULL, NULL, "pciback") < 0)
         goto out;
 
     ret = 0;
@@ -2094,7 +2203,7 @@ xenUnifiedNodeDeviceReAttach(virNodeDevicePtr dev)
         goto out;
     }
 
-    if (pciReAttachDevice(pci, NULL, NULL) < 0)
+    if (pciReAttachDevice(pci, NULL, NULL, "pciback") < 0)
         goto out;
 
     ret = 0;
@@ -2218,6 +2327,9 @@ static virDriver xenUnifiedDriver = {
     .domainGetState = xenUnifiedDomainGetState, /* 0.9.2 */
     .domainSave = xenUnifiedDomainSave, /* 0.0.3 */
     .domainSaveFlags = xenUnifiedDomainSaveFlags, /* 0.9.4 */
+    .domainManagedSave = xenUnifiedDomainManagedSave, /* 1.0.1 */
+    .domainHasManagedSaveImage = xenUnifiedDomainHasManagedSaveImage, /* 1.0.1 */
+    .domainManagedSaveRemove = xenUnifiedDomainManagedSaveRemove, /* 1.0.1 */
     .domainRestore = xenUnifiedDomainRestore, /* 0.0.3 */
     .domainRestoreFlags = xenUnifiedDomainRestoreFlags, /* 0.9.4 */
     .domainCoreDump = xenUnifiedDomainCoreDump, /* 0.1.9 */

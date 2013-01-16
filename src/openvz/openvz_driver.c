@@ -37,7 +37,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
-#include <sys/utsname.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <paths.h>
@@ -45,21 +44,21 @@
 #include <stdio.h>
 #include <sys/wait.h>
 
-#include "virterror_internal.h"
+#include "virerror.h"
 #include "datatypes.h"
 #include "openvz_driver.h"
 #include "openvz_util.h"
-#include "buf.h"
-#include "util.h"
+#include "virbuffer.h"
+#include "virutil.h"
 #include "openvz_conf.h"
 #include "nodeinfo.h"
-#include "memory.h"
+#include "viralloc.h"
 #include "virfile.h"
 #include "virtypedparam.h"
-#include "logging.h"
-#include "command.h"
+#include "virlog.h"
+#include "vircommand.h"
 #include "viruri.h"
-#include "stats_linux.h"
+#include "virstatslinux.h"
 
 #define VIR_FROM_THIS VIR_FROM_OPENVZ
 
@@ -2054,13 +2053,13 @@ openvzDomainUpdateDeviceFlags(virDomainPtr dom, const char *xml,
 
     openvzDriverLock(driver);
     vm = virDomainFindByUUID(&driver->domains, dom->uuid);
-    vmdef = vm->def;
 
     if (!vm) {
         virReportError(VIR_ERR_NO_DOMAIN, "%s",
                        _("no domain with matching uuid"));
         goto cleanup;
     }
+    vmdef = vm->def;
 
     if (virStrToLong_i(vmdef->name, NULL, 10, &veid) < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",

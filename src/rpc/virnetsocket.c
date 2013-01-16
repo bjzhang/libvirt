@@ -1,7 +1,7 @@
 /*
  * virnetsocket.c: generic network socket handling
  *
- * Copyright (C) 2006-2012 Red Hat, Inc.
+ * Copyright (C) 2006-2013 Red Hat, Inc.
  * Copyright (C) 2006 Daniel P. Berrange
  *
  * This library is free software; you can redistribute it and/or
@@ -35,20 +35,23 @@
 # include <netinet/tcp.h>
 #endif
 
+#ifdef HAVE_SYS_UCRED_H
+# include <sys/ucred.h>
+#endif
+
 #include "c-ctype.h"
 #include "virnetsocket.h"
-#include "util.h"
-#include "memory.h"
-#include "virterror_internal.h"
-#include "logging.h"
+#include "virutil.h"
+#include "viralloc.h"
+#include "virerror.h"
+#include "virlog.h"
 #include "virfile.h"
-#include "event.h"
-#include "threads.h"
+#include "virthread.h"
 #include "virprocess.h"
 
 #include "passfd.h"
 
-#if HAVE_LIBSSH2
+#if WITH_SSH2
 # include "virnetsshsession.h"
 #endif
 
@@ -76,8 +79,10 @@ struct _virNetSocket {
     char *localAddrStr;
     char *remoteAddrStr;
 
+#if WITH_GNUTLS
     virNetTLSSessionPtr tlsSession;
-#if HAVE_SASL
+#endif
+#if WITH_SASL
     virNetSASLSessionPtr saslSession;
 
     const char *saslDecoded;
@@ -88,7 +93,7 @@ struct _virNetSocket {
     size_t saslEncodedLength;
     size_t saslEncodedOffset;
 #endif
-#if HAVE_LIBSSH2
+#if WITH_SSH2
     virNetSSHSessionPtr sshSession;
 #endif
 };
@@ -99,7 +104,8 @@ static void virNetSocketDispose(void *obj);
 
 static int virNetSocketOnceInit(void)
 {
-    if (!(virNetSocketClass = virClassNew("virNetSocket",
+    if (!(virNetSocketClass = virClassNew(virClassForObject(),
+                                          "virNetSocket",
                                           sizeof(virNetSocket),
                                           virNetSocketDispose)))
         return -1;
@@ -733,7 +739,7 @@ int virNetSocketNewConnectSSH(const char *nodename,
     return virNetSocketNewConnectCommand(cmd, retsock);
 }
 
-#if HAVE_LIBSSH2
+#if WITH_SSH2
 int
 virNetSocketNewConnectLibSSH2(const char *host,
                               const char *port,
@@ -865,7 +871,7 @@ virNetSocketNewConnectLibSSH2(const char *host ATTRIBUTE_UNUSED,
                          _("libssh2 transport support was not enabled"));
     return -1;
 }
-#endif /* HAVE_LIBSSH2 */
+#endif /* WITH_SSH2 */
 
 int virNetSocketNewConnectExternal(const char **cmdargv,
                                    virNetSocketPtr *retsock)
@@ -938,18 +944,20 @@ virJSONValuePtr virNetSocketPreExecRestart(virNetSocketPtr sock)
 
     virMutexLock(&sock->lock);
 
-#if HAVE_SASL
+#if WITH_SASL
     if (sock->saslSession) {
         virReportError(VIR_ERR_OPERATION_INVALID, "%s",
                        _("Unable to save socket state when SASL session is active"));
         goto error;
     }
 #endif
+#if WITH_GNUTLS
     if (sock->tlsSession) {
         virReportError(VIR_ERR_OPERATION_INVALID, "%s",
                        _("Unable to save socket state when TLS session is active"));
         goto error;
     }
+#endif
 
     if (!(object = virJSONValueNewObject()))
         goto error;
@@ -1008,15 +1016,17 @@ void virNetSocketDispose(void *obj)
         unlink(sock->localAddr.data.un.sun_path);
 #endif
 
+#if WITH_GNUTLS
     /* Make sure it can't send any more I/O during shutdown */
     if (sock->tlsSession)
         virNetTLSSessionSetIOCallbacks(sock->tlsSession, NULL, NULL, NULL);
     virObjectUnref(sock->tlsSession);
-#if HAVE_SASL
+#endif
+#if WITH_SASL
     virObjectUnref(sock->saslSession);
 #endif
 
-#if HAVE_LIBSSH2
+#if WITH_SSH2
     virObjectUnref(sock->sshSession);
 #endif
 
@@ -1091,7 +1101,7 @@ int virNetSocketGetPort(virNetSocketPtr sock)
 }
 
 
-#ifdef SO_PEERCRED
+#if defined(SO_PEERCRED)
 int virNetSocketGetUNIXIdentity(virNetSocketPtr sock,
                                 uid_t *uid,
                                 gid_t *gid,
@@ -1111,6 +1121,30 @@ int virNetSocketGetUNIXIdentity(virNetSocketPtr sock,
     *pid = cr.pid;
     *uid = cr.uid;
     *gid = cr.gid;
+
+    virMutexUnlock(&sock->lock);
+    return 0;
+}
+#elif defined(LOCAL_PEERCRED)
+int virNetSocketGetUNIXIdentity(virNetSocketPtr sock,
+                                uid_t *uid,
+                                gid_t *gid,
+                                pid_t *pid)
+{
+    struct xucred cr;
+    socklen_t cr_len = sizeof(cr);
+    virMutexLock(&sock->lock);
+
+    if (getsockopt(sock->fd, SOL_SOCKET, LOCAL_PEERCRED, &cr, &cr_len) < 0) {
+        virReportSystemError(errno, "%s",
+                             _("Failed to get client socket identity"));
+        virMutexUnlock(&sock->lock);
+        return -1;
+    }
+
+    *pid = -1;
+    *uid = cr.cr_uid;
+    *gid = cr.cr_gid;
 
     virMutexUnlock(&sock->lock);
     return 0;
@@ -1151,6 +1185,7 @@ const char *virNetSocketRemoteAddrString(virNetSocketPtr sock)
 }
 
 
+#if WITH_GNUTLS
 static ssize_t virNetSocketTLSSessionWrite(const char *buf,
                                            size_t len,
                                            void *opaque)
@@ -1181,9 +1216,9 @@ void virNetSocketSetTLSSession(virNetSocketPtr sock,
                                    sock);
     virMutexUnlock(&sock->lock);
 }
+#endif
 
-
-#if HAVE_SASL
+#if WITH_SASL
 void virNetSocketSetSASLSession(virNetSocketPtr sock,
                                 virNetSASLSessionPtr sess)
 {
@@ -1200,12 +1235,12 @@ bool virNetSocketHasCachedData(virNetSocketPtr sock ATTRIBUTE_UNUSED)
     bool hasCached = false;
     virMutexLock(&sock->lock);
 
-#if HAVE_LIBSSH2
+#if WITH_SSH2
     if (virNetSSHSessionHasCachedData(sock->sshSession))
         hasCached = true;
 #endif
 
-#if HAVE_SASL
+#if WITH_SASL
     if (sock->saslDecoded)
         hasCached = true;
 #endif
@@ -1213,7 +1248,7 @@ bool virNetSocketHasCachedData(virNetSocketPtr sock ATTRIBUTE_UNUSED)
     return hasCached;
 }
 
-#if HAVE_LIBSSH2
+#if WITH_SSH2
 static ssize_t virNetSocketLibSSH2Read(virNetSocketPtr sock,
                                        char *buf,
                                        size_t len)
@@ -1233,7 +1268,7 @@ bool virNetSocketHasPendingData(virNetSocketPtr sock ATTRIBUTE_UNUSED)
 {
     bool hasPending = false;
     virMutexLock(&sock->lock);
-#if HAVE_SASL
+#if WITH_SASL
     if (sock->saslEncoded)
         hasPending = true;
 #endif
@@ -1247,19 +1282,23 @@ static ssize_t virNetSocketReadWire(virNetSocketPtr sock, char *buf, size_t len)
     char *errout = NULL;
     ssize_t ret;
 
-#if HAVE_LIBSSH2
+#if WITH_SSH2
     if (sock->sshSession)
         return virNetSocketLibSSH2Read(sock, buf, len);
 #endif
 
 reread:
+#if WITH_GNUTLS
     if (sock->tlsSession &&
         virNetTLSSessionGetHandshakeStatus(sock->tlsSession) ==
         VIR_NET_TLS_HANDSHAKE_COMPLETE) {
         ret = virNetTLSSessionRead(sock->tlsSession, buf, len);
     } else {
+#endif
         ret = read(sock->fd, buf, len);
+#if WITH_GNUTLS
     }
+#endif
 
     if ((ret < 0) && (errno == EINTR))
         goto reread;
@@ -1302,19 +1341,23 @@ static ssize_t virNetSocketWriteWire(virNetSocketPtr sock, const char *buf, size
 {
     ssize_t ret;
 
-#if HAVE_LIBSSH2
+#if WITH_SSH2
     if (sock->sshSession)
         return virNetSocketLibSSH2Write(sock, buf, len);
 #endif
 
 rewrite:
+#if WITH_GNUTLS
     if (sock->tlsSession &&
         virNetTLSSessionGetHandshakeStatus(sock->tlsSession) ==
         VIR_NET_TLS_HANDSHAKE_COMPLETE) {
         ret = virNetTLSSessionWrite(sock->tlsSession, buf, len);
     } else {
+#endif
         ret = write(sock->fd, buf, len);
+#if WITH_GNUTLS
     }
+#endif
 
     if (ret < 0) {
         if (errno == EINTR)
@@ -1336,7 +1379,7 @@ rewrite:
 }
 
 
-#if HAVE_SASL
+#if WITH_SASL
 static ssize_t virNetSocketReadSASL(virNetSocketPtr sock, char *buf, size_t len)
 {
     ssize_t got;
@@ -1439,7 +1482,7 @@ ssize_t virNetSocketRead(virNetSocketPtr sock, char *buf, size_t len)
 {
     ssize_t ret;
     virMutexLock(&sock->lock);
-#if HAVE_SASL
+#if WITH_SASL
     if (sock->saslSession)
         ret = virNetSocketReadSASL(sock, buf, len);
     else
@@ -1454,7 +1497,7 @@ ssize_t virNetSocketWrite(virNetSocketPtr sock, const char *buf, size_t len)
     ssize_t ret;
 
     virMutexLock(&sock->lock);
-#if HAVE_SASL
+#if WITH_SASL
     if (sock->saslSession)
         ret = virNetSocketWriteSASL(sock, buf, len);
     else

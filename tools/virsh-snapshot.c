@@ -34,11 +34,11 @@
 #include <libxml/xmlsave.h>
 
 #include "internal.h"
-#include "buf.h"
-#include "memory.h"
-#include "util.h"
+#include "virbuffer.h"
+#include "viralloc.h"
+#include "virutil.h"
 #include "virsh-domain.h"
-#include "xml.h"
+#include "virxml.h"
 #include "conf/snapshot_conf.h"
 
 /* Helper for snapshot-create and snapshot-create-as */

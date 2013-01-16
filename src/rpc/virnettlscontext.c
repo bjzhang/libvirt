@@ -30,11 +30,11 @@
 
 #include "virnettlscontext.h"
 
-#include "memory.h"
-#include "virterror_internal.h"
-#include "util.h"
-#include "logging.h"
-#include "threads.h"
+#include "viralloc.h"
+#include "virerror.h"
+#include "virutil.h"
+#include "virlog.h"
+#include "virthread.h"
 #include "configmake.h"
 
 #define DH_BITS 1024
@@ -85,12 +85,14 @@ static void virNetTLSSessionDispose(void *obj);
 
 static int virNetTLSContextOnceInit(void)
 {
-    if (!(virNetTLSContextClass = virClassNew("virNetTLSContext",
+    if (!(virNetTLSContextClass = virClassNew(virClassForObject(),
+                                              "virNetTLSContext",
                                               sizeof(virNetTLSContext),
                                               virNetTLSContextDispose)))
         return -1;
 
-    if (!(virNetTLSSessionClass = virClassNew("virNetTLSSession",
+    if (!(virNetTLSSessionClass = virClassNew(virClassForObject(),
+                                              "virNetTLSSession",
                                               sizeof(virNetTLSSession),
                                               virNetTLSSessionDispose)))
         return -1;
