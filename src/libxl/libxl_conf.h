@@ -82,6 +82,60 @@ struct _libxlDriverPrivate {
 typedef struct _libxlEventHookInfo libxlEventHookInfo;
 typedef libxlEventHookInfo *libxlEventHookInfoPtr;
 
+# define JOB_MASK(job)                  (1 << (job - 1))
+# define DEFAULT_JOB_MASK               \
+    (JOB_MASK(LIBXL_JOB_DESTROY) |      \
+     JOB_MASK(LIBXL_JOB_ABORT))
+
+/* Jobs which have to be tracked in domain state XML. */
+# define LIBXL_DOMAIN_TRACK_JOBS        \
+    (JOB_MASK(LIBXL_JOB_DESTROY) |      \
+     JOB_MASK(LIBXL_JOB_ASYNC))
+
+/* Only 1 job is allowed at any time
+ * A job includes *all* libxl.so api, even those just querying
+ * information, not merely actions */
+enum libxlDomainJob {
+    LIBXL_JOB_NONE = 0,      /* Always set to 0 for easy if (jobActive) conditions */
+    LIBXL_JOB_DESTROY,       /* Destroys the domain (cannot be masked out) */
+    LIBXL_JOB_MODIFY,        /* May change state */
+    LIBXL_JOB_ABORT,         /* Abort current async job */
+    LIBXL_JOB_MIGRATION_OP,  /* Operation influencing outgoing migration */
+
+    /* The following item must always be the last item before JOB_LAST */
+    LIBXL_JOB_ASYNC,         /* Asynchronous job */
+
+    LIBXL_JOB_LAST
+};
+VIR_ENUM_DECL(libxlDomainJob)
+
+/* Async job consists of a series of jobs that may change state. Independent
+ * jobs that do not change state (and possibly others if explicitly allowed by
+ * current async job) are allowed to be run even if async job is active.
+ */
+enum libxlDomainAsyncJob {
+    LIBXL_ASYNC_JOB_NONE = 0,
+    LIBXL_ASYNC_JOB_SAVE,
+    LIBXL_ASYNC_JOB_DUMP,
+
+    LIBXL_ASYNC_JOB_LAST
+};
+VIR_ENUM_DECL(libxlDomainAsyncJob)
+
+struct libxlDomainJobObj {
+    virCond cond;                       /* Use to coordinate jobs */
+    enum libxlDomainJob active;         /* Currently running job */
+    int owner;                          /* Thread which set current job */
+
+    virCond asyncCond;                  /* Use to coordinate with async jobs */
+    enum libxlDomainAsyncJob asyncJob;  /* Currently active async job */
+    int asyncOwner;                     /* Thread which set current async job */
+    int phase;                          /* Job phase (mainly for migrations) */
+    unsigned long long mask;            /* Jobs allowed during async job */
+    unsigned long long start;           /* When the async job started */
+    virDomainJobInfo info;              /* Async job progress data */
+};
+
 typedef struct _libxlDomainObjPrivate libxlDomainObjPrivate;
 typedef libxlDomainObjPrivate *libxlDomainObjPrivatePtr;
 struct _libxlDomainObjPrivate {
@@ -93,6 +147,9 @@ struct _libxlDomainObjPrivate {
 
     /* list of libxl timeout registrations */
     libxlEventHookInfoPtr timerRegistrations;
+
+    /* Job object */
+    struct libxlDomainJobObj job;
 };
 
 # define LIBXL_SAVE_MAGIC "libvirt-xml\n \0 \r"
