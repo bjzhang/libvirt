@@ -523,7 +523,7 @@ retry:
         VIR_DEBUG("Wait async job condition for starting job: %s (async=%s)",
                   libxlDomainJobTypeToString(job),
                   libxlDomainAsyncJobTypeToString(priv->job.asyncJob));
-        if (virCondWaitUntil(&priv->job.asyncCond, &obj->lock, then) < 0)
+        if (virCondWaitUntil(&priv->job.asyncCond, &obj->parent.lock, then) < 0)
             goto error;
     }
 
@@ -531,7 +531,7 @@ retry:
         VIR_DEBUG("Wait normal job condition for starting job: %s (async=%s)",
                   libxlDomainJobTypeToString(job),
                   libxlDomainAsyncJobTypeToString(priv->job.asyncJob));
-        if (virCondWaitUntil(&priv->job.cond, &obj->lock, then) < 0)
+        if (virCondWaitUntil(&priv->job.cond, &obj->parent.lock, then) < 0)
             goto error;
     }
 
