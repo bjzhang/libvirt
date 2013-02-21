@@ -45,6 +45,7 @@
 #include "xen_xm.h"
 #include "virtypedparam.h"
 #include "viruri.h"
+#include "xen/block_stats.h"
 
 #define VIR_FROM_THIS VIR_FROM_LIBXL
 
@@ -4146,6 +4147,196 @@ libxlListAllDomains(virConnectPtr conn,
     ret = virDomainObjListExport(driver->domains, conn, domains, flags);
     libxlDriverUnlock(driver);
 
+    return ret;
+}
+
+//find the proper location for the following functions
+static int64_t
+read_stat(const char *path)
+{
+    char str[64];
+    int64_t r;
+    int i;
+    FILE *fp;
+
+    fp = fopen(path, "r");
+    if (!fp)
+      return -1;
+
+    /* read, but don't bail out before closing */
+    i = fread(str, 1, sizeof(str) - 1, fp);
+
+    if (VIR_FCLOSE(fp) != 0        /* disk error */
+        || i < 1)               /* ensure we read at least one byte */
+        return -1;
+
+    str[i] = '\0';              /* make sure the string is nul-terminated */
+    if (xstrtoint64(str, 10, &r) == -1)
+        return -1;
+
+    return r;
+}
+
+static int64_t
+read_bd_stat(int device, int domid, const char *str)
+{
+    static const char *paths[] = {
+        "/sys/bus/xen-backend/devices/vbd-%d-%d/statistics/%s",
+        "/sys/bus/xen-backend/devices/tap-%d-%d/statistics/%s",
+        "/sys/devices/xen-backend/vbd-%d-%d/statistics/%s",
+        "/sys/devices/xen-backend/tap-%d-%d/statistics/%s"
+    };
+
+    int i;
+    char *path;
+    int64_t r;
+
+    for (i = 0; i < ARRAY_CARDINALITY(paths); ++i) {
+        if (virAsprintf(&path, paths[i], domid, device, str) < 0) {
+            virReportOOMError();
+            return -1;
+        }
+
+        r = read_stat(path);
+
+        VIR_FREE(path);
+
+        if (r >= 0) {
+            return r;
+        }
+    }
+
+    return -1;
+}
+
+static int
+read_bd_stats(libxlDomainObjPrivatePtr priv,
+              int device, int domid, struct _virDomainBlockStats *stats)
+{
+    stats->rd_req   = read_bd_stat(device, domid, "rd_req");
+    stats->rd_bytes = read_bd_stat(device, domid, "rd_sect");
+    stats->wr_req   = read_bd_stat(device, domid, "wr_req");
+    stats->wr_bytes = read_bd_stat(device, domid, "wr_sect");
+    stats->errs     = read_bd_stat(device, domid, "oo_req");
+
+    /* None of the files were found - it's likely that this version
+     * of Xen is an old one which just doesn't support stats collection.
+     */
+    if (stats->rd_req == -1 && stats->rd_bytes == -1 &&
+        stats->wr_req == -1 && stats->wr_bytes == -1 &&
+        stats->errs == -1) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("Failed to read any block statistics for domain %d"),
+                       domid);
+        return -1;
+    }
+
+    /* If stats are all zero then either there really isn't any block
+     * device activity, or there is no connected front end device
+     * in which case there are no stats.
+     */
+    /*\TODO
+      add libxl_check_bd_connected in xen libxl
+        snprintf(s, sizeof(s), "/local/domain/0/backend/vbd/%d/%d/state",
+        check wether the result equal to "4" or not
+     */
+    if (stats->rd_req == 0 && stats->rd_bytes == 0 &&
+        stats->wr_req == 0 && stats->wr_bytes == 0 &&
+        stats->errs == 0 &&
+        !libxl_check_bd_connected(priv, device, domid)) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("Frontend block device not connected for domain %d"),
+                       domid);
+        return -1;
+    }
+
+    /* 'Bytes' was really sectors when we read it.  Scale up by
+     * an assumed sector size.
+     */
+    if (stats->rd_bytes > 0) {
+        if (stats->rd_bytes >= ((unsigned long long)1)<<(63-9)) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("stats->rd_bytes would overflow 64 bit counter for domain %d"),
+                           domid);
+            return -1;
+        }
+        stats->rd_bytes *= 512;
+    }
+    if (stats->wr_bytes > 0) {
+        if (stats->wr_bytes >= ((unsigned long long)1)<<(63-9)) {
+            virReportError(VIR_ERR_INTERNAL_ERROR,
+                           _("stats->wr_bytes would overflow 64 bit counter for domain %d"),
+                           domid);
+            return -1;
+        }
+        stats->wr_bytes *= 512;
+    }
+
+    return 0;
+}
+
+static int
+libxlDomainBlockStats(virDomainPtr dom,
+                      const char *path,
+                      struct _virDomainBlockStats *stats)
+{
+    libxlDriverPrivatePtr driver = dom->conn->privateData;
+    int i, ret = -1;
+    virDomainObjPtr vm;
+    virDomainDiskDefPtr disk = NULL;
+    libxlDomainObjPrivatePtr priv;
+    int device;
+
+    libxlDriverLock(driver);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
+    if (!vm) {
+        virReportError(VIR_ERR_NO_DOMAIN, NULL);
+        goto cleanup;
+    }
+
+    if (!virDomainObjIsActive(vm)) {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                       "%s", _("domain is not running"));
+        goto cleanup;
+    }
+
+    if ((i = virDomainDiskIndexByName(vm->def, path, false)) < 0) {
+        virReportError(VIR_ERR_INVALID_ARG,
+                       _("invalid path: %s"), path);
+        goto cleanup;
+    }
+    disk = vm->def->disks[i];
+
+    if (!disk->info.alias) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("missing disk device alias name for %s"), disk->dst);
+        goto cleanup;
+    }
+
+    priv = vm->privateData;
+//    if (libxlDomainObjBeginJob(driver, vm, QEMU_JOB_QUERY) < 0)
+//        goto cleanup;
+
+    if (!virDomainObjIsActive(vm)) {
+        virReportError(VIR_ERR_OPERATION_INVALID,
+                       "%s", _("domain is not running"));
+        goto cleanup;
+    }
+
+    device = xenLinuxDomainDeviceID(dom->id, path);
+
+    if (device < 0)
+        goto cleanup;
+
+    ret = read_bd_stats(priv, device, dom->id, stats);
+//endjob:
+//    if (qemuDomainObjEndJob(driver, vm) == 0)
+//        vm = NULL;
+
+cleanup:
+    if (vm)
+        virObjectUnlock(vm);
+    libxlDriverUnlock(driver);
     return ret;
 }
 
