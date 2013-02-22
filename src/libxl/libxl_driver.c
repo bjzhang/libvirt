@@ -500,7 +500,6 @@ libxlDomainObjSetAsyncJobMask(virDomainObjPtr obj,
  */
 static int ATTRIBUTE_NONNULL(1)
 libxlDomainObjBeginJobInternal(libxlDriverPrivatePtr driver,
-                               bool driver_locked,
                                virDomainObjPtr obj,
                                enum libxlDomainJob job,
                                enum libxlDomainAsyncJob asyncJob)
@@ -514,9 +513,6 @@ libxlDomainObjBeginJobInternal(libxlDriverPrivatePtr driver,
     then = now + LIBXL_JOB_WAIT_TIME;
 
     virObjectRef(obj);
-    if (driver_locked) {
-        libxlDriverUnlock(driver);
-    }
 
 retry:
     while (!libxlDomainNestedJobAllowed(priv, job)) {
@@ -557,15 +553,10 @@ retry:
         priv->job.start = now;
     }
 
-    if (driver_locked) {
-        virDomainObjUnlock(obj);
-        libxlDriverLock(driver);
-        virDomainObjLock(obj);
-    }
-
     if (libxlDomainTrackJob(job))
         libxlDomainObjSaveJob(driver, obj);
 
+    virObjectUnref(obj);
     return 0;
 
 error:
@@ -584,17 +575,12 @@ error:
     else
         virReportSystemError(errno,
                              "%s", _("cannot acquire job mutex"));
-    if (driver_locked) {
-        virDomainObjUnlock(obj);
-        libxlDriverLock(driver);
-        virDomainObjLock(obj);
-    }
     virObjectUnref(obj);
     return -1;
 }
 
 /*
- * obj must be locked before calling, libxlDriverPrivatePtr must NOT be locked
+ * obj must be locked before calling
  *
  * This must be called by anything that will change the VM state
  * in any way
@@ -607,7 +593,7 @@ libxlDomainObjBeginJob(libxlDriverPrivatePtr driver,
                        virDomainObjPtr obj,
                        enum libxlDomainJob job)
 {
-    return libxlDomainObjBeginJobInternal(driver, false, obj, job,
+    return libxlDomainObjBeginJobInternal(driver, obj, job,
                                           LIBXL_ASYNC_JOB_NONE);
 }
 
@@ -616,40 +602,7 @@ libxlDomainObjBeginAsyncJob(libxlDriverPrivatePtr driver,
                             virDomainObjPtr obj,
                             enum libxlDomainAsyncJob asyncJob)
 {
-    return libxlDomainObjBeginJobInternal(driver, false, obj, LIBXL_JOB_ASYNC,
-                                          asyncJob);
-}
-
-/*
- * obj must be locked before calling. libxlDriverPrivatePtr MUST be locked
- *
- * This must be called by anything that will change the VM state
- * in any way
- *
- * Upon successful return, the object will have its ref count increased,
- * successful calls must be followed by EndJob eventually
- */
-static int
-libxlDomainObjBeginJobWithDriver(libxlDriverPrivatePtr driver,
-                                 virDomainObjPtr obj,
-                                 enum libxlDomainJob job)
-{
-    if (job <= LIBXL_JOB_NONE || job >= LIBXL_JOB_ASYNC) {
-        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
-                       _("Attempt to start invalid job"));
-        return -1;
-    }
-
-    return libxlDomainObjBeginJobInternal(driver, true, obj, job,
-                                          LIBXL_ASYNC_JOB_NONE);
-}
-
-static int
-libxlDomainObjBeginAsyncJobWithDriver(libxlDriverPrivatePtr driver,
-                                      virDomainObjPtr obj,
-                                      enum libxlDomainAsyncJob asyncJob)
-{
-    return libxlDomainObjBeginJobInternal(driver, true, obj, LIBXL_JOB_ASYNC,
+    return libxlDomainObjBeginJobInternal(driver, obj, LIBXL_JOB_ASYNC,
                                           asyncJob);
 }
 
@@ -1769,7 +1722,7 @@ libxlDomainCreateXML(virConnectPtr conn, const char *xml,
         goto cleanup;
     def = NULL;
 
-    if (libxlDomainObjBeginJobWithDriver(driver, vm, LIBXL_JOB_MODIFY) < 0)
+    if (libxlDomainObjBeginJob(driver, vm, LIBXL_JOB_MODIFY) < 0)
         goto cleanup;
 
     if (libxlVmStart(driver, vm, (flags & VIR_DOMAIN_START_PAUSED) != 0,
@@ -2024,7 +1977,7 @@ libxlDomainShutdownFlags(virDomainPtr dom, unsigned int flags)
         goto cleanup;
     }
 
-    if (libxlDomainObjBeginJobWithDriver(driver, vm, LIBXL_JOB_MODIFY) < 0)
+    if (libxlDomainObjBeginJob(driver, vm, LIBXL_JOB_MODIFY) < 0)
         goto cleanup;
 
     if (!virDomainObjIsActive(vm)) {
@@ -2084,7 +2037,7 @@ libxlDomainReboot(virDomainPtr dom, unsigned int flags)
         goto cleanup;
     }
 
-    if (libxlDomainObjBeginJobWithDriver(driver, vm, LIBXL_JOB_MODIFY) < 0)
+    if (libxlDomainObjBeginJob(driver, vm, LIBXL_JOB_MODIFY) < 0)
         goto cleanup;
 
     if (!virDomainObjIsActive(vm)) {
@@ -2134,7 +2087,7 @@ libxlDomainDestroyFlags(virDomainPtr dom,
         goto cleanup;
     }
 
-    if (libxlDomainObjBeginJobWithDriver(driver, vm, LIBXL_JOB_DESTROY) < 0)
+    if (libxlDomainObjBeginJob(driver, vm, LIBXL_JOB_DESTROY) < 0)
         goto cleanup;
 
     if (!virDomainObjIsActive(vm)) {
@@ -2448,8 +2401,8 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     int fd;
     int ret = -1;
 
-    if (libxlDomainObjBeginAsyncJobWithDriver(driver, vm,
-                                              LIBXL_ASYNC_JOB_SAVE) < 0)
+    if (libxlDomainObjBeginAsyncJob(driver, vm,
+                                    LIBXL_ASYNC_JOB_SAVE) < 0)
         goto cleanup;
 
     if (virDomainObjGetState(vm, NULL) == VIR_DOMAIN_PAUSED) {
@@ -2487,11 +2440,9 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
         goto endjob;
     }
 
-    virDomainObjUnlock(vm);
     libxlDriverUnlock(driver);
     ret =  libxl_domain_suspend(priv->ctx, vm->def->id, fd, 0, NULL);
     libxlDriverLock(driver);
-    virDomainObjLock(vm);
     if (ret != 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Failed to save domain '%d' with libxenlight"),
@@ -2611,7 +2562,7 @@ libxlDomainRestoreFlags(virConnectPtr conn, const char *from,
 
     def = NULL;
 
-    if (libxlDomainObjBeginJobWithDriver(driver, vm, LIBXL_JOB_MODIFY) < 0)
+    if (libxlDomainObjBeginJob(driver, vm, LIBXL_JOB_MODIFY) < 0)
        goto cleanup;
 
     if ((ret = libxlVmStart(driver, vm, false, fd)) < 0 &&
@@ -2662,8 +2613,8 @@ libxlDomainCoreDump(virDomainPtr dom, const char *to, unsigned int flags)
         goto cleanup;
     }
 
-    if (libxlDomainObjBeginAsyncJobWithDriver(driver, vm,
-                                              LIBXL_ASYNC_JOB_DUMP) < 0)
+    if (libxlDomainObjBeginAsyncJob(driver, vm,
+                                    LIBXL_ASYNC_JOB_DUMP) < 0)
         goto cleanup;
 
     if (!virDomainObjIsActive(vm)) {
@@ -2687,11 +2638,9 @@ libxlDomainCoreDump(virDomainPtr dom, const char *to, unsigned int flags)
     }
 
 
-    virDomainObjUnlock(vm);
     libxlDriverUnlock(driver);
     ret = libxl_domain_core_dump(priv->ctx, dom->id, to, NULL);
     libxlDriverLock(driver);
-    virDomainObjLock(vm);
     if (ret != 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Failed to dump core of domain '%d' with libxenlight"),
@@ -3383,7 +3332,7 @@ libxlDomainCreateWithFlags(virDomainPtr dom,
         goto cleanup;
     }
 
-    if (libxlDomainObjBeginJobWithDriver(driver, vm, LIBXL_JOB_MODIFY) < 0)
+    if (libxlDomainObjBeginJob(driver, vm, LIBXL_JOB_MODIFY) < 0)
         goto cleanup;
 
     if (virDomainObjIsActive(vm)) {
@@ -3922,7 +3871,7 @@ libxlDomainModifyDeviceFlags(virDomainPtr dom, const char *xml,
         goto cleanup;
     }
 
-    if (libxlDomainObjBeginJobWithDriver(driver, vm, LIBXL_JOB_MODIFY) < 0)
+    if (libxlDomainObjBeginJob(driver, vm, LIBXL_JOB_MODIFY) < 0)
         goto cleanup;
 
     if (virDomainObjIsActive(vm)) {
@@ -4508,7 +4457,7 @@ libxlDomainGetJobInfo(virDomainPtr dom,
     libxlDomainObjPrivatePtr priv;
 
     libxlDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     libxlDriverUnlock(driver);
     if (!vm) {
         char uuidstr[VIR_UUID_STRING_BUFLEN];
@@ -4546,7 +4495,7 @@ libxlDomainGetJobInfo(virDomainPtr dom,
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -4559,7 +4508,7 @@ libxlDomainAbortJob(virDomainPtr dom)
     libxlDomainObjPrivatePtr priv;
 
     libxlDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     libxlDriverUnlock(driver);
     if (!vm) {
         char uuidstr[VIR_UUID_STRING_BUFLEN];
@@ -4599,7 +4548,7 @@ endjob:
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
