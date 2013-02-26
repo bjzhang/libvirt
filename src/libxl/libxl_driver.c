@@ -1836,7 +1836,6 @@ libxlDomainSuspend(virDomainPtr dom)
 
     libxlDriverLock(driver);
     vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
-    libxlDriverUnlock(driver);
 
     if (!vm) {
         char uuidstr[VIR_UUID_STRING_BUFLEN];
@@ -1883,10 +1882,9 @@ cleanup:
     if (vm)
         virObjectUnlock(vm);
     if (event) {
-        libxlDriverLock(driver);
         libxlDomainEventQueue(driver, event);
-        libxlDriverUnlock(driver);
     }
+    libxlDriverUnlock(driver);
     return ret;
 }
 
@@ -1902,7 +1900,6 @@ libxlDomainResume(virDomainPtr dom)
 
     libxlDriverLock(driver);
     vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
-    libxlDriverUnlock(driver);
 
     if (!vm) {
         char uuidstr[VIR_UUID_STRING_BUFLEN];
@@ -1950,10 +1947,9 @@ cleanup:
     if (vm)
         virObjectUnlock(vm);
     if (event) {
-        libxlDriverLock(driver);
         libxlDomainEventQueue(driver, event);
-        libxlDriverUnlock(driver);
     }
+    libxlDriverUnlock(driver);
     return ret;
 }
 
@@ -2198,7 +2194,6 @@ libxlDomainSetMemoryFlags(virDomainPtr dom, unsigned long newmem,
 
     libxlDriverLock(driver);
     vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
-    libxlDriverUnlock(driver);
 
     if (!vm) {
         virReportError(VIR_ERR_NO_DOMAIN, "%s", _("no domain with matching uuid"));
@@ -2298,6 +2293,7 @@ endjob:
 cleanup:
     if (vm)
         virObjectUnlock(vm);
+    libxlDriverUnlock(driver);
     return ret;
 }
 
@@ -2867,7 +2863,6 @@ libxlDomainSetVcpusFlags(virDomainPtr dom, unsigned int nvcpus,
 
     libxlDriverLock(driver);
     vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
-    libxlDriverUnlock(driver);
 
     if (!vm) {
         virReportError(VIR_ERR_NO_DOMAIN, "%s", _("no domain with matching uuid"));
@@ -2968,6 +2963,7 @@ cleanup:
     VIR_FREE(bitmask);
      if (vm)
         virObjectUnlock(vm);
+    libxlDriverUnlock(driver);
     return ret;
 }
 
@@ -4509,7 +4505,6 @@ libxlDomainAbortJob(virDomainPtr dom)
 
     libxlDriverLock(driver);
     vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
-    libxlDriverUnlock(driver);
     if (!vm) {
         char uuidstr[VIR_UUID_STRING_BUFLEN];
         virUUIDFormat(dom->uuid, uuidstr);
@@ -4549,6 +4544,7 @@ endjob:
 cleanup:
     if (vm)
         virObjectUnlock(vm);
+    libxlDriverUnlock(driver);
     return ret;
 }
 
