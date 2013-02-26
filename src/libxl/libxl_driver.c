@@ -556,7 +556,6 @@ retry:
     if (libxlDomainTrackJob(job))
         libxlDomainObjSaveJob(driver, obj);
 
-    virObjectUnref(obj);
     return 0;
 
 error:
