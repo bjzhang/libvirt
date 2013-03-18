@@ -89,6 +89,8 @@
         }                                              \
     } while (0)
 
+//#define AO_HOW_FUNC
+
 /* Object used to store info related to libxl event registrations */
 struct _libxlEventHookInfo {
     libxlEventHookInfoPtr next;
@@ -100,6 +102,9 @@ struct _libxlEventHookInfo {
 static virClassPtr libxlDomainObjPrivateClass;
 
 static libxlDriverPrivatePtr libxl_driver = NULL;
+
+static libxl_asyncop_how g_ao_how;
+static int ao_how_enable = 0;
 
 /* Function declarations */
 static int
@@ -677,48 +682,57 @@ libxlEventHandler(void *data ATTRIBUTE_UNUSED, const libxl_event *event)
     virDomainEventPtr dom_event = NULL;
     libxl_shutdown_reason xl_reason = event->u.domain_shutdown.shutdown_reason;
 
-    if (event->type == LIBXL_EVENT_TYPE_DOMAIN_SHUTDOWN) {
-        virDomainShutoffReason reason;
+    switch (event->type) {
+    case LIBXL_EVENT_TYPE_DOMAIN_SHUTDOWN:
+        {
+            virDomainShutoffReason reason;
+            /*
+             * Similar to the xl implementation, ignore SUSPEND.  Any actions needed
+             * after calling libxl_domain_suspend() are handled by it's callers.
+             */
+            if (xl_reason == LIBXL_SHUTDOWN_REASON_SUSPEND)
+                goto cleanup;
 
-        /*
-         * Similar to the xl implementation, ignore SUSPEND.  Any actions needed
-         * after calling libxl_domain_suspend() are handled by it's callers.
-         */
-        if (xl_reason == LIBXL_SHUTDOWN_REASON_SUSPEND)
-            goto cleanup;
+            libxlDriverLock(driver);
+            vm = virDomainObjListFindByID(driver->domains, event->domid);
+            libxlDriverUnlock(driver);
 
-        libxlDriverLock(driver);
-        vm = virDomainObjListFindByID(driver->domains, event->domid);
-        libxlDriverUnlock(driver);
+            if (!vm)
+                goto cleanup;
 
-        if (!vm)
-            goto cleanup;
-
-        switch (xl_reason) {
-            case LIBXL_SHUTDOWN_REASON_POWEROFF:
-            case LIBXL_SHUTDOWN_REASON_CRASH:
-                if (xl_reason == LIBXL_SHUTDOWN_REASON_CRASH) {
-                    dom_event = virDomainEventNewFromObj(vm,
-                                              VIR_DOMAIN_EVENT_STOPPED,
-                                              VIR_DOMAIN_EVENT_STOPPED_CRASHED);
-                    reason = VIR_DOMAIN_SHUTOFF_CRASHED;
-                } else {
-                    reason = VIR_DOMAIN_SHUTOFF_SHUTDOWN;
-                }
-                libxlVmReap(driver, vm, reason);
-                if (!vm->persistent) {
-                    virDomainObjListRemove(driver->domains, vm);
-                    vm = NULL;
-                }
-                break;
-            case LIBXL_SHUTDOWN_REASON_REBOOT:
-                libxlVmReap(driver, vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN);
-                libxlVmStart(driver, vm, 0, -1);
-                break;
-            default:
-                VIR_INFO("Unhandled shutdown_reason %d", xl_reason);
-                break;
+            switch (xl_reason) {
+                case LIBXL_SHUTDOWN_REASON_POWEROFF:
+                case LIBXL_SHUTDOWN_REASON_CRASH:
+                    if (xl_reason == LIBXL_SHUTDOWN_REASON_CRASH) {
+                        dom_event = virDomainEventNewFromObj(vm,
+                                                  VIR_DOMAIN_EVENT_STOPPED,
+                                                  VIR_DOMAIN_EVENT_STOPPED_CRASHED);
+                        reason = VIR_DOMAIN_SHUTOFF_CRASHED;
+                    } else {
+                        reason = VIR_DOMAIN_SHUTOFF_SHUTDOWN;
+                    }
+                    libxlVmReap(driver, vm, reason);
+                    if (!vm->persistent) {
+                        virDomainObjListRemove(driver->domains, vm);
+                        vm = NULL;
+                    }
+                    break;
+                case LIBXL_SHUTDOWN_REASON_REBOOT:
+                    libxlVmReap(driver, vm, VIR_DOMAIN_SHUTOFF_SHUTDOWN);
+                    libxlVmStart(driver, vm, 0, -1);
+                    break;
+                default:
+                    VIR_INFO("Unhandled shutdown_reason %d", xl_reason);
+                    break;
+            }
         }
+        break;
+    case LIBXL_EVENT_TYPE_OPERATION_COMPLETE:
+        VIR_INFO("LIBXL_EVENT_TYPE_OPERATION_COMPLETE");
+        break;
+    default:
+        VIR_WARN("warning, got unexpected event type %d", event->type);
+        break;
     }
 
 cleanup:
@@ -1261,6 +1275,14 @@ libxlStartup(bool privileged,
 
     virDomainObjListForEach(libxl_driver->domains, libxlDomainManagedSaveLoad,
                             libxl_driver);
+
+    if (virFileExists("/var/lib/libvirt/libxl/ao_how")) {
+        VIR_INFO("use ao_how in save");
+        ao_how_enable = 1;
+    } else {
+        VIR_INFO("do not use ao_how in save");
+        ao_how_enable = 0;
+    }
 
     libxlDriverUnlock(libxl_driver);
 
@@ -2074,6 +2096,16 @@ libxlDomainGetState(virDomainPtr dom,
     return ret;
 }
 
+volatile int suspend_done = 0;
+//#ifdef AO_HOW_FUNC
+//static void
+//libxlSuspendCallback(libxl_ctx *ctx ATTRIBUTE_UNUSED, int rc ATTRIBUTE_UNUSED, void *for_callback ATTRIBUTE_UNUSED)
+//{
+//    VIR_INFO("suspend successful");
+//    suspend_done  = 1;
+//}
+//#endif //#ifdef AO_HOW_FUNC
+
 /* This internal function expects the driver lock to already be held on
  * entry and the vm must be active. */
 static int
@@ -2087,13 +2119,21 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     uint32_t xml_len;
     int fd;
     int ret = -1;
+    int state;
+    int reason;
+    libxl_asyncop_how* ao_how = NULL;
 
-    if (virDomainObjGetState(vm, NULL) == VIR_DOMAIN_PAUSED) {
+    state = virDomainObjGetState(vm, &reason);
+    if (VIR_DOMAIN_PAUSED == state ) {
         virReportError(VIR_ERR_OPERATION_INVALID,
                        _("Domain '%d' has to be running because libxenlight will"
                          " suspend it"), vm->def->id);
         goto cleanup;
     }
+    VIR_INFO("Domain '%d': <domstatus state='%s' reason='%s' pid='%lld'>\n",
+             vm->def->id, virDomainStateTypeToString(state),
+             virDomainStateReasonToString(state, reason),
+             (long long)vm->def->id);
 
     if ((fd = virFileOpenAs(to, O_CREAT|O_TRUNC|O_WRONLY, S_IRUSR|S_IWUSR,
                             -1, -1, 0)) < 0) {
@@ -2101,6 +2141,7 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
                              _("Failed to create domain save file '%s'"), to);
         goto cleanup;
     }
+    VIR_INFO("save file open successful: fd<%d> from '%s'", fd, to);
 
     if ((xml = virDomainDefFormat(vm->def, 0)) == NULL)
         goto cleanup;
@@ -2116,6 +2157,8 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
                        _("Failed to write save file header"));
         goto cleanup;
     }
+    VIR_INFO("write save file header successful(magic<%s>, version<%u>, xml len<%u>)",
+             hdr.magic, hdr.version, hdr.xmlLen);
 
     if (safewrite(fd, xml, xml_len) != xml_len) {
         virReportError(VIR_ERR_OPERATION_FAILED, "%s",
@@ -2123,21 +2166,38 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
         goto cleanup;
     }
 
-    if (libxl_domain_suspend(priv->ctx, vm->def->id, fd, 0, NULL) != 0) {
+//#ifdef AO_HOW_FUNC
+//    ao_how->callback = libxlSuspendCallback;
+//#else
+//    ao_how->callback = NULL;
+//#endif //#ifdef AO_HOW_FUNC
+    if ( 1 == ao_how_enable )
+        ao_how = &g_ao_how;
+
+    if (libxl_domain_suspend(priv->ctx, vm->def->id, fd, 0, ao_how) != 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Failed to save domain '%d' with libxenlight"),
                        vm->def->id);
         goto cleanup;
     }
+    if ( 1 == ao_how_enable ) {
+        while(!suspend_done) {
+            VIR_INFO("waiting suspend done");
+            sleep(1);
+        }
+        virReportError(VIR_ERR_INTERNAL_ERROR, _("suspend successful in %s"), __FUNCTION__);
+    }
 
     event = virDomainEventNewFromObj(vm, VIR_DOMAIN_EVENT_STOPPED,
                                          VIR_DOMAIN_EVENT_STOPPED_SAVED);
 
+    VIR_INFO("prepare to reap vm");
     if (libxlVmReap(driver, vm, VIR_DOMAIN_SHUTOFF_SAVED) != 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Failed to destroy domain '%d'"), vm->def->id);
         goto cleanup;
     }
+    VIR_INFO("reap vm successful");
 
     vm->hasManagedSave = true;
     ret = 0;

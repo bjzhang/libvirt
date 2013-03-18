@@ -737,11 +737,11 @@ ifeq (0,$(MAKELEVEL))
       stamp="$$($(_submodule_hash) $(_curr_status) 2>/dev/null)";	\
       test "$$stamp" = "$$actual"; echo $$?)
   _clean_requested = $(filter %clean,$(MAKECMDGOALS))
-  ifeq (1,$(_update_required)$(_clean_requested))
-    $(info INFO: gnulib update required; running ./autogen.sh first)
-    $(shell touch $(srcdir)/AUTHORS $(srcdir)/ChangeLog)
-maint.mk Makefile: _autogen
-  endif
+#  ifeq (1,$(_update_required)$(_clean_requested))
+#    $(info INFO: gnulib update required; running ./autogen.sh first)
+#    $(shell touch $(srcdir)/AUTHORS $(srcdir)/ChangeLog)
+#maint.mk Makefile: _autogen
+#  endif
 endif
 
 # It is necessary to call autogen any time gnulib changes.  Autogen
