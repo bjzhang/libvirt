@@ -8,7 +8,7 @@
  */
 
 /*
- * Copyright (C) 2010-2012 Red Hat, Inc.
+ * Copyright (C) 2010-2013 Red Hat, Inc.
  * Copyright (C) 2008-2009 Sun Microsystems, Inc.
  *
  * This file is part of a free software library; you can redistribute
@@ -34,7 +34,6 @@
 
 #include <config.h>
 
-#include <sys/utsname.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -45,14 +44,14 @@
 #include "domain_conf.h"
 #include "snapshot_conf.h"
 #include "network_conf.h"
-#include "virterror_internal.h"
+#include "virerror.h"
 #include "domain_event.h"
 #include "storage_conf.h"
-#include "storage_file.h"
-#include "uuid.h"
-#include "memory.h"
+#include "virstoragefile.h"
+#include "viruuid.h"
+#include "viralloc.h"
 #include "nodeinfo.h"
-#include "logging.h"
+#include "virlog.h"
 #include "vbox_driver.h"
 #include "configmake.h"
 #include "virfile.h"
@@ -81,9 +80,30 @@
 
 
 #define VIR_FROM_THIS                   VIR_FROM_VBOX
-#define VBOX_UTF16_FREE(arg)            data->pFuncs->pfnUtf16Free(arg)
-#define VBOX_UTF8_FREE(arg)             data->pFuncs->pfnUtf8Free(arg)
-#define VBOX_COM_UNALLOC_MEM(arg)       data->pFuncs->pfnComUnallocMem(arg)
+#define VBOX_UTF16_FREE(arg)                                            \
+    do {                                                                \
+        if (arg) {                                                      \
+            data->pFuncs->pfnUtf16Free(arg);                            \
+            (arg) = NULL;                                               \
+        }                                                               \
+    } while (0)
+
+#define VBOX_UTF8_FREE(arg)                                             \
+    do {                                                                \
+        if (arg) {                                                      \
+            data->pFuncs->pfnUtf8Free(arg);                             \
+            (arg) = NULL;                                               \
+        }                                                               \
+    } while (0)
+
+#define VBOX_COM_UNALLOC_MEM(arg)                                       \
+    do {                                                                \
+        if (arg) {                                                      \
+            data->pFuncs->pfnComUnallocMem(arg);                        \
+            (arg) = NULL;                                               \
+        }                                                               \
+    } while (0)
+
 #define VBOX_UTF16_TO_UTF8(arg1, arg2)  data->pFuncs->pfnUtf16ToUtf8(arg1, arg2)
 #define VBOX_UTF8_TO_UTF16(arg1, arg2)  data->pFuncs->pfnUtf8ToUtf16(arg1, arg2)
 
@@ -445,6 +465,7 @@ vboxIIDFromUUID_v2_x(vboxGlobalData *data, vboxIID_v2_x *iid,
 
     iid->value = &iid->backing;
 
+    sa_assert(iid->value);
     nsIDFromChar(iid->value, uuid);
 }
 
@@ -823,20 +844,18 @@ cleanup:
 
 
 static int vboxDefaultConsoleType(const char *ostype ATTRIBUTE_UNUSED,
-                                  const char *arch ATTRIBUTE_UNUSED)
+                                  virArch arch ATTRIBUTE_UNUSED)
 {
     return VIR_DOMAIN_CHR_CONSOLE_TARGET_TYPE_SERIAL;
 }
 
 
-static virCapsPtr vboxCapsInit(void) {
-    struct utsname utsname;
+static virCapsPtr vboxCapsInit(void)
+{
     virCapsPtr caps;
     virCapsGuestPtr guest;
 
-    uname(&utsname);
-
-    if ((caps = virCapabilitiesNew(utsname.machine,
+    if ((caps = virCapabilitiesNew(virArchFromHost(),
                                    0, 0)) == NULL)
         goto no_memory;
 
@@ -847,8 +866,7 @@ static virCapsPtr vboxCapsInit(void) {
 
     if ((guest = virCapabilitiesAddGuest(caps,
                                          "hvm",
-                                         utsname.machine,
-                                         sizeof(void *) * CHAR_BIT,
+                                         caps->host.arch,
                                          NULL,
                                          NULL,
                                          0,
@@ -868,7 +886,7 @@ static virCapsPtr vboxCapsInit(void) {
     return caps;
 
 no_memory:
-    virCapabilitiesFree(caps);
+    virObjectUnref(caps);
     return NULL;
 }
 
@@ -959,7 +977,7 @@ static void vboxUninitialize(vboxGlobalData *data) {
     if (data->pFuncs)
         data->pFuncs->pfnComUninitialize();
 
-    virCapabilitiesFree(data->caps);
+    virObjectUnref(data->caps);
 #if VBOX_API_VERSION == 2002
     /* No domainEventCallbacks in 2.2.* version */
 #else  /* !(VBOX_API_VERSION == 2002) */
@@ -1404,14 +1422,8 @@ static virDomainPtr vboxDomainLookupByName(virConnectPtr conn, const char *name)
                     ret->id = i + 1;
             }
 
-            if (machineNameUtf8) {
-                VBOX_UTF8_FREE(machineNameUtf8);
-                machineNameUtf8 = NULL;
-            }
-            if (machineNameUtf16) {
-                VBOX_COM_UNALLOC_MEM(machineNameUtf16);
-                machineNameUtf16 = NULL;
-            }
+            VBOX_UTF8_FREE(machineNameUtf8);
+            VBOX_COM_UNALLOC_MEM(machineNameUtf16);
             if (matched == 1)
                 break;
         }
@@ -1974,10 +1986,8 @@ static int vboxDomainGetInfo(virDomainPtr dom, virDomainInfoPtr info) {
                 ret = 0;
             }
 
-            if (machineName)
-                VBOX_UTF8_FREE(machineName);
-            if (machineNameUtf16)
-                VBOX_COM_UNALLOC_MEM(machineNameUtf16);
+            VBOX_UTF8_FREE(machineName);
+            VBOX_COM_UNALLOC_MEM(machineNameUtf16);
             if (info->nrVirtCpu)
                 break;
         }
@@ -2230,7 +2240,6 @@ static char *vboxDomainGetXMLDesc(virDomainPtr dom, unsigned int flags) {
         machine->vtbl->GetAccessible(machine, &accessible);
         if (accessible) {
             int i = 0;
-            struct utsname utsname;
             PRBool PAEEnabled                   = PR_FALSE;
             PRBool ACPIEnabled                  = PR_FALSE;
             PRBool IOAPICEnabled                = PR_FALSE;
@@ -2312,8 +2321,7 @@ static char *vboxDomainGetXMLDesc(virDomainPtr dom, unsigned int flags) {
 
             def->os.type = strdup("hvm");
 
-            uname(&utsname);
-            def->os.arch = strdup(utsname.machine);
+            def->os.arch = virArchFromHost();
 
             def->os.nBootDevs = 0;
             for (i = 0; (i < VIR_DOMAIN_BOOT_LAST) && (i < maxBootPosition); i++) {
@@ -2440,10 +2448,8 @@ static char *vboxDomainGetXMLDesc(virDomainPtr dom, unsigned int flags) {
                             VBOX_UTF16_TO_UTF8(valueDisplayUtf16, &valueDisplayUtf8);
                             VBOX_UTF16_FREE(valueDisplayUtf16);
 
-                            if (strlen(valueDisplayUtf8) <= 0) {
+                            if (strlen(valueDisplayUtf8) <= 0)
                                 VBOX_UTF8_FREE(valueDisplayUtf8);
-                                valueDisplayUtf8 = NULL;
-                            }
                         }
 
                         if (STREQ(valueTypeUtf8, "sdl")) {
@@ -2473,8 +2479,7 @@ static char *vboxDomainGetXMLDesc(virDomainPtr dom, unsigned int flags) {
                             }
                             totalPresent++;
                         }
-                        if (valueDisplayUtf8)
-                            VBOX_UTF8_FREE(valueDisplayUtf8);
+                        VBOX_UTF8_FREE(valueDisplayUtf8);
                     }
 
                     if (STREQ(valueTypeUtf8, "vrdp"))
@@ -3567,10 +3572,8 @@ vboxStartMachine(virDomainPtr dom, int i, IMachine *machine,
                 VBOX_UTF16_TO_UTF8(valueDisplayUtf16, &valueDisplayUtf8);
                 VBOX_UTF16_FREE(valueDisplayUtf16);
 
-                if (strlen(valueDisplayUtf8) <= 0) {
+                if (strlen(valueDisplayUtf8) <= 0)
                     VBOX_UTF8_FREE(valueDisplayUtf8);
-                    valueDisplayUtf8 = NULL;
-                }
             }
 
             if (STREQ(valueTypeUtf8, "sdl")) {
@@ -3618,8 +3621,7 @@ vboxStartMachine(virDomainPtr dom, int i, IMachine *machine,
     } else {
         guiPresent = 1;
     }
-    if (valueDisplayUtf8)
-        VBOX_UTF8_FREE(valueDisplayUtf8);
+    VBOX_UTF8_FREE(valueDisplayUtf8);
 
     if (guiPresent) {
         if (guiDisplay) {
@@ -3785,7 +3787,7 @@ vboxSetBootDeviceOrder(virDomainDefPtr def, vboxGlobalData *data,
     int i = 0;
 
     VIR_DEBUG("def->os.type             %s", def->os.type);
-    VIR_DEBUG("def->os.arch             %s", def->os.arch);
+    VIR_DEBUG("def->os.arch             %s", virArchToString(def->os.arch));
     VIR_DEBUG("def->os.machine          %s", def->os.machine);
     VIR_DEBUG("def->os.nBootDevs        %zu", def->os.nBootDevs);
     VIR_DEBUG("def->os.bootDevs[0]      %d", def->os.bootDevs[0]);
@@ -4597,10 +4599,7 @@ vboxAttachSerial(virDomainDefPtr def, vboxGlobalData *data, IMachine *machine)
             }
 
             VBOX_RELEASE(serialPort);
-            if (pathUtf16) {
-                VBOX_UTF16_FREE(pathUtf16);
-                pathUtf16 = NULL;
-            }
+            VBOX_UTF16_FREE(pathUtf16);
         }
     }
 }
@@ -4664,10 +4663,7 @@ vboxAttachParallel(virDomainDefPtr def, vboxGlobalData *data, IMachine *machine)
             parallelPort->vtbl->SetEnabled(parallelPort, 1);
 
             VBOX_RELEASE(parallelPort);
-            if (pathUtf16) {
-                VBOX_UTF16_FREE(pathUtf16);
-                pathUtf16 = NULL;
-            }
+            VBOX_UTF16_FREE(pathUtf16);
         }
     }
 }
@@ -5392,10 +5388,8 @@ static int vboxDomainAttachDeviceImpl(virDomainPtr dom,
 
     dev = virDomainDeviceDefParse(data->caps, def, xml,
                                   VIR_DOMAIN_XML_INACTIVE);
-    if (dev == NULL) {
-        virReportOOMError();
+    if (dev == NULL)
         goto cleanup;
-    }
 
     vboxIIDFromUUID(&iid, dom->uuid);
     rc = VBOX_OBJECT_GET_MACHINE(iid.value, &machine);
@@ -5629,10 +5623,8 @@ static int vboxDomainDetachDevice(virDomainPtr dom, const char *xml) {
 
     dev = virDomainDeviceDefParse(data->caps, def, xml,
                                   VIR_DOMAIN_XML_INACTIVE);
-    if (dev == NULL) {
-        virReportOOMError();
+    if (dev == NULL)
         goto cleanup;
-    }
 
     vboxIIDFromUUID(&iid, dom->uuid);
     rc = VBOX_OBJECT_GET_MACHINE(iid.value, &machine);
@@ -7725,7 +7717,7 @@ static virNetworkPtr vboxNetworkDefineCreateXML(virConnectPtr conn, const char *
     virSocketAddr netmask;
 
     if ((!def) ||
-        (def->forwardType != VIR_NETWORK_FORWARD_NONE) ||
+        (def->forward.type != VIR_NETWORK_FORWARD_NONE) ||
         (def->nips == 0 || !def->ips))
         goto cleanup;
 
@@ -8129,7 +8121,7 @@ static char *vboxNetworkGetXMLDesc(virNetworkPtr network,
 
                 VBOX_UTF8_TO_UTF16(networkNameUtf8 , &networkNameUtf16);
 
-                def->forwardType = VIR_NETWORK_FORWARD_NONE;
+                def->forward.type = VIR_NETWORK_FORWARD_NONE;
 
                 data->vboxObj->vtbl->FindDHCPServerByNetworkName(data->vboxObj,
                                                                  networkNameUtf16,
@@ -8464,8 +8456,7 @@ static virStorageVolPtr vboxStorageVolLookupByName(virStoragePoolPtr pool, const
                         break;
                     }
 
-                    if (nameUtf8)
-                        VBOX_UTF8_FREE(nameUtf8);
+                    VBOX_UTF8_FREE(nameUtf8);
                 }
             }
         }
@@ -8596,8 +8587,7 @@ static virStorageVolPtr vboxStorageVolLookupByPath(virConnectPtr conn, const cha
                 vboxIIDUnalloc(&hddIID);
             }
 
-            if (hddNameUtf8)
-                VBOX_UTF8_FREE(hddNameUtf8);
+            VBOX_UTF8_FREE(hddNameUtf8);
         }
 
         VBOX_MEDIUM_RELEASE(hardDisk);
@@ -8837,8 +8827,7 @@ static int vboxStorageVolDelete(virStorageVolPtr vol,
                                                 VIR_DEBUG("deregistering hdd:%d", deregister);
                                             }
 
-                                            if (controller)
-                                                VBOX_UTF16_FREE(controller);
+                                            VBOX_UTF16_FREE(controller);
                                         }
                                         vboxIIDUnalloc(&iid);
                                     }

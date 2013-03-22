@@ -28,12 +28,13 @@
 
 # include "internal.h"
 
-# include "util.h"
+# include "virutil.h"
 # include "virhash.h"
-# include "xml.h"
-# include "buf.h"
+# include "virxml.h"
+# include "virbuffer.h"
 # include "virsocketaddr.h"
 # include "virmacaddr.h"
+# include "domain_conf.h"
 
 /* XXX
  * The config parser/structs should not be using platform specific
@@ -556,6 +557,7 @@ typedef struct _virNWFilterDriverState virNWFilterDriverState;
 typedef virNWFilterDriverState *virNWFilterDriverStatePtr;
 struct _virNWFilterDriverState {
     virMutex lock;
+    bool privileged;
 
     virNWFilterObjList nwfilters;
 
@@ -587,7 +589,6 @@ enum UpdateStep {
 struct domUpdateCBStruct {
     virConnectPtr conn;
     enum UpdateStep step;
-    int err;
     virHashTablePtr skipInterfaces;
 };
 
@@ -724,14 +725,15 @@ void virNWFilterObjUnlock(virNWFilterObjPtr obj);
 void virNWFilterLockFilterUpdates(void);
 void virNWFilterUnlockFilterUpdates(void);
 
-int virNWFilterConfLayerInit(virHashIterator domUpdateCB);
+int virNWFilterConfLayerInit(virDomainObjListIterator domUpdateCB);
 void virNWFilterConfLayerShutdown(void);
 
 int virNWFilterInstFiltersOnAllVMs(virConnectPtr conn);
 
 
 typedef int (*virNWFilterRebuild)(virConnectPtr conn,
-                                  virHashIterator, void *data);
+                                  virDomainObjListIterator domUpdateCB,
+                                  void *data);
 typedef void (*virNWFilterVoidCall)(void);
 
 

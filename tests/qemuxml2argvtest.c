@@ -12,7 +12,7 @@
 
 # include "internal.h"
 # include "testutils.h"
-# include "util/memory.h"
+# include "viralloc.h"
 # include "qemu/qemu_capabilities.h"
 # include "qemu/qemu_command.h"
 # include "qemu/qemu_domain.h"
@@ -31,6 +31,9 @@ fakeSecretGetValue(virSecretPtr obj ATTRIBUTE_UNUSED,
                    unsigned int internalFlags ATTRIBUTE_UNUSED)
 {
     char *secret = strdup("AQCVn5hO6HzFAhAAq0NCv8jtJcIcE+HOBlMQ1A");
+    if (!secret) {
+        return NULL;
+    }
     *value_size = strlen(secret);
     return (unsigned char *) secret;
 }
@@ -78,7 +81,7 @@ typedef enum {
 
 static int testCompareXMLToArgvFiles(const char *xml,
                                      const char *cmdline,
-                                     qemuCapsPtr extraFlags,
+                                     virQEMUCapsPtr extraFlags,
                                      const char *migrateFrom,
                                      int migrateFd,
                                      virQemuXML2ArgvTestFlags flags)
@@ -91,7 +94,6 @@ static int testCompareXMLToArgvFiles(const char *xml,
     virDomainChrSourceDef monitor_chr;
     virConnectPtr conn;
     char *log = NULL;
-    char *emulator = NULL;
     virCommandPtr cmd = NULL;
 
     if (!(conn = virGetConnect()))
@@ -106,7 +108,7 @@ static int testCompareXMLToArgvFiles(const char *xml,
         goto out;
     }
 
-    if (qemuCapsGet(extraFlags, QEMU_CAPS_DOMID))
+    if (virQEMUCapsGet(extraFlags, QEMU_CAPS_DOMID))
         vmdef->id = 6;
     else
         vmdef->id = -1;
@@ -116,11 +118,11 @@ static int testCompareXMLToArgvFiles(const char *xml,
     monitor_chr.data.nix.path = (char *)"/tmp/test-monitor";
     monitor_chr.data.nix.listen = true;
 
-    qemuCapsSetList(extraFlags,
-                    QEMU_CAPS_VNC_COLON,
-                    QEMU_CAPS_NO_REBOOT,
-                    QEMU_CAPS_NO_ACPI,
-                    QEMU_CAPS_LAST);
+    virQEMUCapsSetList(extraFlags,
+                       QEMU_CAPS_VNC_COLON,
+                       QEMU_CAPS_NO_REBOOT,
+                       QEMU_CAPS_NO_ACPI,
+                       QEMU_CAPS_LAST);
 
     if (STREQ(vmdef->os.machine, "pc") &&
         STREQ(vmdef->emulator, "/usr/bin/qemu-system-x86_64")) {
@@ -129,7 +131,7 @@ static int testCompareXMLToArgvFiles(const char *xml,
             goto out;
     }
 
-    if (qemuCapsGet(extraFlags, QEMU_CAPS_DEVICE)) {
+    if (virQEMUCapsGet(extraFlags, QEMU_CAPS_DEVICE)) {
         if (qemuDomainAssignAddresses(vmdef, extraFlags, NULL)) {
             if (flags & FLAG_EXPECT_ERROR)
                 goto ok;
@@ -141,9 +143,9 @@ static int testCompareXMLToArgvFiles(const char *xml,
     VIR_FREE(log);
     virResetLastError();
 
-    if (STREQLEN(vmdef->os.arch, "x86_64", 6) ||
-        STREQLEN(vmdef->os.arch, "i686", 4)) {
-        qemuCapsSet(extraFlags, QEMU_CAPS_PCI_MULTIBUS);
+    if (vmdef->os.arch == VIR_ARCH_X86_64 ||
+        vmdef->os.arch == VIR_ARCH_I686) {
+        virQEMUCapsSet(extraFlags, QEMU_CAPS_PCI_MULTIBUS);
     }
 
     if (qemuAssignDeviceAliases(vmdef, extraFlags) < 0)
@@ -173,15 +175,6 @@ static int testCompareXMLToArgvFiles(const char *xml,
     if (!(actualargv = virCommandToString(cmd)))
         goto out;
 
-    if (emulator) {
-        /* Skip the abs_srcdir portion of replacement emulator.  */
-        char *start_skip = strstr(actualargv, abs_srcdir);
-        char *end_skip = strstr(actualargv, emulator);
-        if (!start_skip || !end_skip)
-            goto out;
-        memmove(start_skip, end_skip, strlen(end_skip) + 1);
-    }
-
     len = virtTestLoadFile(cmdline, &expectargv);
     if (len < 0)
         goto out;
@@ -203,7 +196,6 @@ static int testCompareXMLToArgvFiles(const char *xml,
 
 out:
     VIR_FREE(log);
-    VIR_FREE(emulator);
     VIR_FREE(expectargv);
     VIR_FREE(actualargv);
     virCommandFree(cmd);
@@ -215,7 +207,7 @@ out:
 
 struct testInfo {
     const char *name;
-    qemuCapsPtr extraFlags;
+    virQEMUCapsPtr extraFlags;
     const char *migrateFrom;
     int migrateFd;
     unsigned int flags;
@@ -236,7 +228,7 @@ testCompareXMLToArgvHelper(const void *data)
                     abs_srcdir, info->name) < 0)
         goto cleanup;
 
-    if (qemuCapsGet(info->extraFlags, QEMU_CAPS_MONITOR_JSON))
+    if (virQEMUCapsGet(info->extraFlags, QEMU_CAPS_MONITOR_JSON))
         flags |= FLAG_JSON;
 
     result = testCompareXMLToArgvFiles(xml, args, info->extraFlags,
@@ -251,7 +243,7 @@ cleanup:
 
 
 static int
-testAddCPUModels(qemuCapsPtr caps, bool skipLegacy)
+testAddCPUModels(virQEMUCapsPtr caps, bool skipLegacy)
 {
     const char *newModels[] = {
         "Opteron_G3", "Opteron_G2", "Opteron_G1",
@@ -265,13 +257,13 @@ testAddCPUModels(qemuCapsPtr caps, bool skipLegacy)
     size_t i;
 
     for (i = 0 ; i < ARRAY_CARDINALITY(newModels) ; i++) {
-        if (qemuCapsAddCPUDefinition(caps, newModels[i]) < 0)
+        if (virQEMUCapsAddCPUDefinition(caps, newModels[i]) < 0)
             return -1;
     }
     if (skipLegacy)
         return 0;
     for (i = 0 ; i < ARRAY_CARDINALITY(legacyModels) ; i++) {
-        if (qemuCapsAddCPUDefinition(caps, legacyModels[i]) < 0)
+        if (virQEMUCapsAddCPUDefinition(caps, legacyModels[i]) < 0)
             return -1;
     }
     return 0;
@@ -289,18 +281,30 @@ mymain(void)
     if (!abs_top_srcdir)
         abs_top_srcdir = "..";
 
+    driver.config = virQEMUDriverConfigNew(false);
+    VIR_FREE(driver.config->spiceListen);
+    VIR_FREE(driver.config->vncListen);
+
+    VIR_FREE(driver.config->vncTLSx509certdir);
+    if ((driver.config->vncTLSx509certdir = strdup("/etc/pki/libvirt-vnc")) == NULL)
+        return EXIT_FAILURE;
+    VIR_FREE(driver.config->spiceTLSx509certdir);
+    if ((driver.config->spiceTLSx509certdir = strdup("/etc/pki/libvirt-spice")) == NULL)
+        return EXIT_FAILURE;
+
     if ((driver.caps = testQemuCapsInit()) == NULL)
         return EXIT_FAILURE;
-    if ((driver.stateDir = strdup("/nowhere")) == NULL)
+    VIR_FREE(driver.config->stateDir);
+    if ((driver.config->stateDir = strdup("/nowhere")) == NULL)
         return EXIT_FAILURE;
-    if ((driver.hugetlbfs_mount = strdup("/dev/hugepages")) == NULL)
+    VIR_FREE(driver.config->hugetlbfsMount);
+    if ((driver.config->hugetlbfsMount = strdup("/dev/hugepages")) == NULL)
         return EXIT_FAILURE;
-    if ((driver.hugepage_path = strdup("/dev/hugepages/libvirt/qemu")) == NULL)
+    VIR_FREE(driver.config->hugepagePath);
+    if ((driver.config->hugepagePath = strdup("/dev/hugepages/libvirt/qemu")) == NULL)
         return EXIT_FAILURE;
-    driver.spiceTLS = 1;
-    if (!(driver.spiceTLSx509certdir = strdup("/etc/pki/libvirt-spice")))
-        return EXIT_FAILURE;
-    if (!(driver.spicePassword = strdup("123456")))
+    driver.config->spiceTLS = 1;
+    if (!(driver.config->spicePassword = strdup("123456")))
         return EXIT_FAILURE;
     if (virAsprintf(&map, "%s/src/cpu/cpu_map.xml", abs_top_srcdir) < 0 ||
         cpuMapOverride(map) < 0) {
@@ -313,11 +317,11 @@ mymain(void)
         static struct testInfo info = {                                 \
             name, NULL, migrateFrom, migrateFd, (flags)                 \
         };                                                              \
-        if (!(info.extraFlags = qemuCapsNew()))                         \
+        if (!(info.extraFlags = virQEMUCapsNew()))                      \
             return EXIT_FAILURE;                                        \
         if (testAddCPUModels(info.extraFlags, skipLegacyCPUs) < 0)      \
             return EXIT_FAILURE;                                        \
-        qemuCapsSetList(info.extraFlags, __VA_ARGS__, QEMU_CAPS_LAST);  \
+        virQEMUCapsSetList(info.extraFlags, __VA_ARGS__, QEMU_CAPS_LAST);\
         if (virtTestRun("QEMU XML-2-ARGV " name,                        \
                         1, testCompareXMLToArgvHelper, &info) < 0)      \
             ret = -1;                                                   \
@@ -489,6 +493,8 @@ mymain(void)
             QEMU_CAPS_DRIVE, QEMU_CAPS_DRIVE_FORMAT);
     DO_TEST("disk-drive-network-rbd-auth",
             QEMU_CAPS_DRIVE, QEMU_CAPS_DRIVE_FORMAT);
+    DO_TEST("disk-drive-network-rbd-ipv6",
+            QEMU_CAPS_DRIVE, QEMU_CAPS_DRIVE_FORMAT);
     DO_TEST("disk-drive-no-boot",
             QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_BOOTINDEX);
     DO_TEST("disk-usb",  NONE);
@@ -504,6 +510,14 @@ mymain(void)
             QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
             QEMU_CAPS_SCSI_CD, QEMU_CAPS_SCSI_LSI, QEMU_CAPS_VIRTIO_SCSI_PCI);
     DO_TEST("disk-scsi-disk-wwn",
+            QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
+            QEMU_CAPS_SCSI_CD, QEMU_CAPS_SCSI_LSI, QEMU_CAPS_VIRTIO_SCSI_PCI,
+            QEMU_CAPS_SCSI_DISK_WWN);
+    DO_TEST("disk-scsi-disk-vpd",
+            QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
+            QEMU_CAPS_SCSI_CD, QEMU_CAPS_SCSI_LSI, QEMU_CAPS_VIRTIO_SCSI_PCI,
+            QEMU_CAPS_SCSI_DISK_WWN);
+    DO_TEST_FAILURE("disk-scsi-disk-vpd-build-error",
             QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
             QEMU_CAPS_SCSI_CD, QEMU_CAPS_SCSI_LSI, QEMU_CAPS_VIRTIO_SCSI_PCI,
             QEMU_CAPS_SCSI_DISK_WWN);
@@ -547,17 +561,16 @@ mymain(void)
     DO_TEST("graphics-vnc", QEMU_CAPS_VNC);
     DO_TEST("graphics-vnc-socket", QEMU_CAPS_VNC);
 
-    driver.vncSASL = 1;
-    driver.vncSASLdir = strdup("/root/.sasl2");
+    driver.config->vncSASL = 1;
+    VIR_FREE(driver.config->vncSASLdir);
+    driver.config->vncSASLdir = strdup("/root/.sasl2");
     DO_TEST("graphics-vnc-sasl", QEMU_CAPS_VNC, QEMU_CAPS_VGA);
-    driver.vncTLS = 1;
-    driver.vncTLSx509verify = 1;
-    driver.vncTLSx509certdir = strdup("/etc/pki/tls/qemu");
+    driver.config->vncTLS = 1;
+    driver.config->vncTLSx509verify = 1;
     DO_TEST("graphics-vnc-tls", QEMU_CAPS_VNC);
-    driver.vncSASL = driver.vncTLSx509verify = driver.vncTLS = 0;
-    VIR_FREE(driver.vncSASLdir);
-    VIR_FREE(driver.vncTLSx509certdir);
-    driver.vncSASLdir = driver.vncTLSx509certdir = NULL;
+    driver.config->vncSASL = driver.config->vncTLSx509verify = driver.config->vncTLS = 0;
+    VIR_FREE(driver.config->vncSASLdir);
+    VIR_FREE(driver.config->vncTLSx509certdir);
 
     DO_TEST("graphics-sdl", NONE);
     DO_TEST("graphics-sdl-fullscreen", NONE);
@@ -566,7 +579,8 @@ mymain(void)
             QEMU_CAPS_VGA, QEMU_CAPS_VGA_NONE);
     DO_TEST("graphics-spice",
             QEMU_CAPS_VGA, QEMU_CAPS_VGA_QXL,
-            QEMU_CAPS_DEVICE, QEMU_CAPS_SPICE);
+            QEMU_CAPS_DEVICE, QEMU_CAPS_SPICE,
+            QEMU_CAPS_DEVICE_QXL);
     DO_TEST("graphics-spice-agentmouse",
             QEMU_CAPS_VGA, QEMU_CAPS_VGA_QXL,
             QEMU_CAPS_DEVICE, QEMU_CAPS_SPICE,
@@ -574,7 +588,8 @@ mymain(void)
             QEMU_CAPS_NODEFCONFIG);
     DO_TEST("graphics-spice-compression",
             QEMU_CAPS_VGA, QEMU_CAPS_VGA_QXL,
-            QEMU_CAPS_DEVICE, QEMU_CAPS_SPICE);
+            QEMU_CAPS_DEVICE, QEMU_CAPS_SPICE,
+            QEMU_CAPS_DEVICE_QXL);
     DO_TEST("graphics-spice-timeout",
             QEMU_CAPS_DRIVE,
             QEMU_CAPS_VGA, QEMU_CAPS_VGA_QXL,
@@ -583,7 +598,8 @@ mymain(void)
     DO_TEST("graphics-spice-qxl-vga",
             QEMU_CAPS_VGA, QEMU_CAPS_VGA_QXL,
             QEMU_CAPS_DEVICE, QEMU_CAPS_SPICE,
-            QEMU_CAPS_DEVICE_QXL_VGA);
+            QEMU_CAPS_DEVICE_QXL_VGA,
+            QEMU_CAPS_DEVICE_QXL);
     DO_TEST("graphics-spice-usb-redir",
             QEMU_CAPS_VGA, QEMU_CAPS_SPICE,
             QEMU_CAPS_CHARDEV, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
@@ -669,6 +685,9 @@ mymain(void)
     DO_TEST("console-virtio-s390",
             QEMU_CAPS_DEVICE, QEMU_CAPS_CHARDEV, QEMU_CAPS_NODEFCONFIG,
             QEMU_CAPS_DRIVE,  QEMU_CAPS_VIRTIO_S390);
+    DO_TEST("console-sclp",
+            QEMU_CAPS_DEVICE, QEMU_CAPS_CHARDEV, QEMU_CAPS_NODEFCONFIG,
+            QEMU_CAPS_DRIVE, QEMU_CAPS_VIRTIO_S390, QEMU_CAPS_SCLP_S390);
     DO_TEST("channel-spicevmc",
             QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
             QEMU_CAPS_SPICE, QEMU_CAPS_CHARDEV_SPICEVMC);
@@ -858,8 +877,13 @@ mymain(void)
             QEMU_CAPS_DRIVE, QEMU_CAPS_DEVICE, QEMU_CAPS_NODEFCONFIG,
             QEMU_CAPS_IDE_CD, QEMU_CAPS_BLOCKIO);
 
-    VIR_FREE(driver.stateDir);
-    virCapabilitiesFree(driver.caps);
+    DO_TEST("video-device-pciaddr-default",
+            QEMU_CAPS_KVM, QEMU_CAPS_VNC,
+            QEMU_CAPS_DEVICE, QEMU_CAPS_DEVICE_VIDEO_PRIMARY,
+            QEMU_CAPS_DEVICE_QXL, QEMU_CAPS_DEVICE_QXL_VGA);
+
+    virObjectUnref(driver.config);
+    virObjectUnref(driver.caps);
     VIR_FREE(map);
 
     return ret==0 ? EXIT_SUCCESS : EXIT_FAILURE;

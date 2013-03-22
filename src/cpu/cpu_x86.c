@@ -1,7 +1,7 @@
 /*
  * cpu_x86.c: CPU driver for CPUs with x86 compatible CPUID instruction
  *
- * Copyright (C) 2009-2011 Red Hat, Inc.
+ * Copyright (C) 2009-2011, 2013 Red Hat, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -25,13 +25,14 @@
 
 #include <stdint.h>
 
-#include "logging.h"
-#include "memory.h"
-#include "util.h"
+#include "virlog.h"
+#include "viralloc.h"
+#include "virutil.h"
 #include "cpu.h"
 #include "cpu_map.h"
 #include "cpu_x86.h"
-#include "buf.h"
+#include "virbuffer.h"
+#include "virendian.h"
 
 
 #define VIR_FROM_THIS VIR_FROM_CPU
@@ -40,7 +41,7 @@
 
 static const struct cpuX86cpuid cpuidNull = { 0, 0, 0, 0, 0 };
 
-static const char *archs[] = { "i686", "x86_64" };
+static const virArch archs[] = { VIR_ARCH_I686, VIR_ARCH_X86_64 };
 
 struct x86_vendor {
     char *name;
@@ -548,22 +549,13 @@ x86VendorLoad(xmlXPathContextPtr ctxt,
     }
 
     vendor->cpuid.function = 0;
-    vendor->cpuid.ebx = (string[0]) |
-                        (string[1] << 8) |
-                        (string[2] << 16) |
-                        (string[3] << 24);
-    vendor->cpuid.edx = (string[4]) |
-                        (string[5] << 8) |
-                        (string[6] << 16) |
-                        (string[7] << 24);
-    vendor->cpuid.ecx = (string[8]) |
-                        (string[9] << 8) |
-                        (string[10] << 16) |
-                        (string[11] << 24);
+    vendor->cpuid.ebx = virReadBufInt32LE(string);
+    vendor->cpuid.edx = virReadBufInt32LE(string + 4);
+    vendor->cpuid.ecx = virReadBufInt32LE(string + 8);
 
-    if (!map->vendors)
+    if (!map->vendors) {
         map->vendors = vendor;
-    else {
+    } else {
         vendor->next = map->vendors;
         map->vendors = vendor;
     }
@@ -1165,22 +1157,23 @@ x86Compute(virCPUDefPtr host,
     enum compare_result result;
     unsigned int i;
 
-    if (cpu->arch != NULL) {
+    if (cpu->arch != VIR_ARCH_NONE) {
         bool found = false;
 
         for (i = 0; i < ARRAY_CARDINALITY(archs); i++) {
-            if (STREQ(archs[i], cpu->arch)) {
+            if (archs[i] == cpu->arch) {
                 found = true;
                 break;
             }
         }
 
         if (!found) {
-            VIR_DEBUG("CPU arch %s does not match host arch", cpu->arch);
+            VIR_DEBUG("CPU arch %s does not match host arch",
+                      virArchToString(cpu->arch));
             if (message &&
                 virAsprintf(message,
                             _("CPU arch %s does not match host arch"),
-                            cpu->arch) < 0)
+                            virArchToString(cpu->arch)) < 0)
                 goto no_memory;
             return VIR_CPU_COMPARE_INCOMPATIBLE;
         }
@@ -1643,9 +1636,10 @@ x86Baseline(virCPUDefPtr *cpus,
     if (!(base_model = x86ModelFromCPU(cpus[0], map, VIR_CPU_FEATURE_REQUIRE)))
         goto error;
 
-    if (VIR_ALLOC(cpu) < 0 ||
-        !(cpu->arch = strdup(cpus[0]->arch)))
+    if (VIR_ALLOC(cpu) < 0)
         goto no_memory;
+
+    cpu->arch = cpus[0]->arch;
     cpu->type = VIR_CPU_TYPE_GUEST;
     cpu->match = VIR_CPU_MATCH_EXACT;
 
@@ -1713,7 +1707,7 @@ x86Baseline(virCPUDefPtr *cpus,
     if (!outputVendor)
         VIR_FREE(cpu->vendor);
 
-    VIR_FREE(cpu->arch);
+    cpu->arch = VIR_ARCH_NONE;
 
 cleanup:
     x86ModelFree(base_model);

@@ -238,6 +238,9 @@ mymain(void)
     DO_TEST("seclabel-static");
     DO_TEST("seclabel-none");
     DO_TEST("numad-static-vcpu-no-numatune");
+    DO_TEST("disk-scsi-lun-passthrough-sgio");
+
+    DO_TEST("disk-scsi-disk-vpd");
 
     /* These tests generate different XML */
     DO_TEST_DIFFERENT("balloon-device-auto");
@@ -255,7 +258,7 @@ mymain(void)
 
     DO_TEST_DIFFERENT("metadata");
 
-    virCapabilitiesFree(driver.caps);
+    virObjectUnref(driver.caps);
 
     return ret==0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

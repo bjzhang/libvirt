@@ -22,8 +22,8 @@
 #include <config.h>
 
 #include "netdev_vlan_conf.h"
-#include "virterror_internal.h"
-#include "memory.h"
+#include "virerror.h"
+#include "viralloc.h"
 
 #define VIR_FROM_THIS VIR_FROM_NONE
 
@@ -32,7 +32,7 @@ virNetDevVlanParse(xmlNodePtr node, xmlXPathContextPtr ctxt, virNetDevVlanPtr de
 {
     int ret = -1;
     xmlNodePtr save = ctxt->node;
-    const char *trunk;
+    const char *trunk = NULL;
     xmlNodePtr *tagNodes = NULL;
     int nTags, ii;
 
@@ -103,6 +103,7 @@ virNetDevVlanParse(xmlNodePtr node, xmlXPathContextPtr ctxt, virNetDevVlanPtr de
 error:
     ctxt->node = save;
     VIR_FREE(tagNodes);
+    VIR_FREE(trunk);
     if (ret < 0)
         virNetDevVlanClear(def);
     return ret;

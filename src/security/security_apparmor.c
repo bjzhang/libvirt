@@ -1,7 +1,7 @@
 /*
  * AppArmor security driver for libvirt
  *
- * Copyright (C) 2011 Red Hat, Inc.
+ * Copyright (C) 2011-2013 Red Hat, Inc.
  * Copyright (C) 2009-2010 Canonical Ltd.
  *
  * This library is free software; you can redistribute it and/or
@@ -38,17 +38,17 @@
 #include "internal.h"
 
 #include "security_apparmor.h"
-#include "util.h"
-#include "memory.h"
-#include "virterror_internal.h"
+#include "virutil.h"
+#include "viralloc.h"
+#include "virerror.h"
 #include "datatypes.h"
-#include "uuid.h"
-#include "pci.h"
-#include "hostusb.h"
+#include "viruuid.h"
+#include "virpci.h"
+#include "virusb.h"
 #include "virfile.h"
 #include "configmake.h"
-#include "command.h"
-#include "logging.h"
+#include "vircommand.h"
+#include "virlog.h"
 
 #define VIR_FROM_THIS VIR_FROM_SECURITY
 #define SECURITY_APPARMOR_VOID_DOI      "0"
@@ -177,13 +177,13 @@ load_profile(virSecurityManagerPtr mgr,
     int rc = -1;
     bool create = true;
     char *xml = NULL;
-    virCommandPtr cmd;
+    virCommandPtr cmd = NULL;
     const char *probe = virSecurityManagerGetAllowDiskFormatProbing(mgr)
         ? "1" : "0";
 
     xml = virDomainDefFormat(def, VIR_DOMAIN_XML_SECURE);
     if (!xml)
-        goto clean;
+        goto cleanup;
 
     if (profile_status_file(profile) >= 0)
         create = false;
@@ -202,8 +202,9 @@ load_profile(virSecurityManagerPtr mgr,
     virCommandSetInputBuffer(cmd, xml);
     rc = virCommandRun(cmd, NULL);
 
-  clean:
+cleanup:
     VIR_FREE(xml);
+    virCommandFree(cmd);
 
     return rc;
 }
@@ -305,7 +306,7 @@ reload_profile(virSecurityManagerPtr mgr,
 }
 
 static int
-AppArmorSetSecurityUSBLabel(usbDevice *dev ATTRIBUTE_UNUSED,
+AppArmorSetSecurityUSBLabel(virUSBDevicePtr dev ATTRIBUTE_UNUSED,
                            const char *file, void *opaque)
 {
     struct SDPDOP *ptr = opaque;
@@ -327,8 +328,8 @@ AppArmorSetSecurityUSBLabel(usbDevice *dev ATTRIBUTE_UNUSED,
 }
 
 static int
-AppArmorSetSecurityPCILabel(pciDevice *dev ATTRIBUTE_UNUSED,
-                           const char *file, void *opaque)
+AppArmorSetSecurityPCILabel(virPCIDevicePtr dev ATTRIBUTE_UNUSED,
+                            const char *file, void *opaque)
 {
     struct SDPDOP *ptr = opaque;
     virDomainDefPtr def = ptr->def;
@@ -589,7 +590,8 @@ AppArmorRestoreSecurityAllLabel(virSecurityManagerPtr mgr ATTRIBUTE_UNUSED,
  * LOCALSTATEDIR/log/libvirt/qemu/<vm name>.log
  */
 static int
-AppArmorSetSecurityProcessLabel(virSecurityManagerPtr mgr, virDomainDefPtr def)
+AppArmorSetSecurityProcessLabel(virSecurityManagerPtr mgr ATTRIBUTE_UNUSED,
+                                virDomainDefPtr def)
 {
     int rc = -1;
     char *profile_name = NULL;
@@ -602,12 +604,12 @@ AppArmorSetSecurityProcessLabel(virSecurityManagerPtr mgr, virDomainDefPtr def)
     if ((profile_name = get_profile_name(def)) == NULL)
         return rc;
 
-    if (STRNEQ(virSecurityManagerGetModel(mgr), secdef->model)) {
+    if (STRNEQ(SECURITY_APPARMOR_NAME, secdef->model)) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("security label driver mismatch: "
                          "\'%s\' model configured for domain, but "
                          "hypervisor driver is \'%s\'."),
-                       secdef->model, virSecurityManagerGetModel(mgr));
+                       secdef->model, SECURITY_APPARMOR_NAME);
         if (use_apparmor() > 0)
             goto clean;
     }
@@ -622,6 +624,45 @@ AppArmorSetSecurityProcessLabel(virSecurityManagerPtr mgr, virDomainDefPtr def)
   clean:
     VIR_FREE(profile_name);
 
+    return rc;
+}
+
+/* Called directly by API user prior to virCommandRun().
+ * virCommandRun() will then call aa_change_profile() (if a
+ * cmd->appArmorProfile has been set) *after forking the child
+ * process*.
+ */
+static int
+AppArmorSetSecurityChildProcessLabel(virSecurityManagerPtr mgr ATTRIBUTE_UNUSED,
+                                     virDomainDefPtr def,
+                                     virCommandPtr cmd)
+{
+    int rc = -1;
+    char *profile_name = NULL;
+    const virSecurityLabelDefPtr secdef =
+        virDomainDefGetSecurityLabelDef(def, SECURITY_APPARMOR_NAME);
+
+    if (!secdef)
+        goto cleanup;
+
+    if (STRNEQ(SECURITY_APPARMOR_NAME, secdef->model)) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("security label driver mismatch: "
+                         "\'%s\' model configured for domain, but "
+                         "hypervisor driver is \'%s\'."),
+                       secdef->model, SECURITY_APPARMOR_NAME);
+        if (use_apparmor() > 0)
+            goto cleanup;
+    }
+
+    if ((profile_name = get_profile_name(def)) == NULL)
+        goto cleanup;
+
+    virCommandSetAppArmorProfile(cmd, profile_name);
+    rc = 0;
+
+  cleanup:
+    VIR_FREE(profile_name);
     return rc;
 }
 
@@ -742,8 +783,8 @@ AppArmorReserveSecurityLabel(virSecurityManagerPtr mgr ATTRIBUTE_UNUSED,
 static int
 AppArmorSetSecurityHostdevLabel(virSecurityManagerPtr mgr,
                                 virDomainDefPtr def,
-                                virDomainHostdevDefPtr dev)
-
+                                virDomainHostdevDefPtr dev,
+                                const char *vroot)
 {
     struct SDPDOP *ptr;
     int ret = -1;
@@ -769,28 +810,31 @@ AppArmorSetSecurityHostdevLabel(virSecurityManagerPtr mgr,
 
     switch (dev->source.subsys.type) {
     case VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_USB: {
-        usbDevice *usb = usbGetDevice(dev->source.subsys.u.usb.bus,
-                                      dev->source.subsys.u.usb.device);
+        virUSBDevicePtr usb =
+            virUSBDeviceNew(dev->source.subsys.u.usb.bus,
+                            dev->source.subsys.u.usb.device,
+                            vroot);
 
         if (!usb)
             goto done;
 
-        ret = usbDeviceFileIterate(usb, AppArmorSetSecurityUSBLabel, ptr);
-        usbFreeDevice(usb);
+        ret = virUSBDeviceFileIterate(usb, AppArmorSetSecurityUSBLabel, ptr);
+        virUSBDeviceFree(usb);
         break;
     }
 
     case VIR_DOMAIN_HOSTDEV_SUBSYS_TYPE_PCI: {
-        pciDevice *pci = pciGetDevice(dev->source.subsys.u.pci.domain,
-                                      dev->source.subsys.u.pci.bus,
-                                      dev->source.subsys.u.pci.slot,
-                                      dev->source.subsys.u.pci.function);
+        virPCIDevicePtr pci =
+            virPCIDeviceNew(dev->source.subsys.u.pci.domain,
+                            dev->source.subsys.u.pci.bus,
+                            dev->source.subsys.u.pci.slot,
+                            dev->source.subsys.u.pci.function);
 
         if (!pci)
             goto done;
 
-        ret = pciDeviceFileIterate(pci, AppArmorSetSecurityPCILabel, ptr);
-        pciFreeDevice(pci);
+        ret = virPCIDeviceFileIterate(pci, AppArmorSetSecurityPCILabel, ptr);
+        virPCIDeviceFree(pci);
         break;
     }
 
@@ -808,7 +852,8 @@ done:
 static int
 AppArmorRestoreSecurityHostdevLabel(virSecurityManagerPtr mgr,
                                     virDomainDefPtr def,
-                                    virDomainHostdevDefPtr dev ATTRIBUTE_UNUSED)
+                                    virDomainHostdevDefPtr dev ATTRIBUTE_UNUSED,
+                                    const char *vroot ATTRIBUTE_UNUSED)
 
 {
     const virSecurityLabelDefPtr secdef =
@@ -921,6 +966,7 @@ virSecurityDriver virAppArmorSecurityDriver = {
 
     .domainGetSecurityProcessLabel      = AppArmorGetSecurityProcessLabel,
     .domainSetSecurityProcessLabel      = AppArmorSetSecurityProcessLabel,
+    .domainSetSecurityChildProcessLabel = AppArmorSetSecurityChildProcessLabel,
 
     .domainSetSecurityAllLabel          = AppArmorSetSecurityAllLabel,
     .domainRestoreSecurityAllLabel      = AppArmorRestoreSecurityAllLabel,

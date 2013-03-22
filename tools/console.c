@@ -38,12 +38,12 @@
 
 # include "internal.h"
 # include "console.h"
-# include "logging.h"
-# include "util.h"
+# include "virlog.h"
+# include "virutil.h"
 # include "virfile.h"
-# include "memory.h"
-# include "threads.h"
-# include "virterror_internal.h"
+# include "viralloc.h"
+# include "virthread.h"
+# include "virerror.h"
 
 /*
  * Convert given character to control character.
@@ -407,7 +407,7 @@ int vshRunConsole(virDomainPtr dom,
         if (con->st)
             virStreamFree(con->st);
         virMutexDestroy(&con->lock);
-        ignore_value(virCondDestroy(&con->cond));
+        virCondDestroy(&con->cond);
         VIR_FREE(con);
     }
 

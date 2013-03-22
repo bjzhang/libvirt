@@ -1,7 +1,7 @@
 /*
  * virsh.c: a shell to exercise the libvirt API
  *
- * Copyright (C) 2005, 2007-2012 Red Hat, Inc.
+ * Copyright (C) 2005, 2007-2013 Red Hat, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -42,7 +42,6 @@
 #include <sys/stat.h>
 #include <inttypes.h>
 #include <strings.h>
-#include <termios.h>
 
 #include <libxml/parser.h>
 #include <libxml/tree.h>
@@ -55,22 +54,22 @@
 #endif
 
 #include "internal.h"
-#include "virterror_internal.h"
+#include "virerror.h"
 #include "base64.h"
-#include "buf.h"
+#include "virbuffer.h"
 #include "console.h"
-#include "util.h"
-#include "memory.h"
-#include "xml.h"
+#include "virutil.h"
+#include "viralloc.h"
+#include "virxml.h"
 #include "libvirt/libvirt-qemu.h"
+#include "libvirt/libvirt-lxc.h"
 #include "virfile.h"
-#include "event_poll.h"
 #include "configmake.h"
-#include "threads.h"
-#include "command.h"
+#include "virthread.h"
+#include "vircommand.h"
 #include "virkeycode.h"
 #include "virnetdevbandwidth.h"
-#include "util/bitmap.h"
+#include "virbitmap.h"
 #include "conf/domain_conf.h"
 #include "virtypedparam.h"
 
@@ -332,7 +331,10 @@ vshReconnect(vshControl *ctl)
                                    virConnectAuthPtrDefault,
                                    ctl->readonly ? VIR_CONNECT_RO : 0);
     if (!ctl->conn) {
-        vshError(ctl, "%s", _("Failed to reconnect to the hypervisor"));
+        if (disconnected)
+            vshError(ctl, "%s", _("Failed to reconnect to the hypervisor"));
+        else
+            vshError(ctl, "%s", _("failed to connect to the hypervisor"));
     } else {
         if (virConnectRegisterCloseCallback(ctl->conn, vshCatchDisconnect,
                                             NULL, NULL) < 0)
@@ -438,16 +440,23 @@ int vshStreamSink(virStreamPtr st ATTRIBUTE_UNUSED,
  * "help" command
  */
 static const vshCmdInfo info_help[] = {
-    {"help", N_("print help")},
-    {"desc", N_("Prints global help, command specific help, or help for a\n"
-                "    group of related commands")},
-
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("print help")
+    },
+    {.name = "desc",
+     .data = N_("Prints global help, command specific help, or help for a\n"
+                "    group of related commands")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_help[] = {
-    {"command", VSH_OT_DATA, 0, N_("Prints global help, command specific help, or help for a group of related commands")},
-    {NULL, 0, 0, NULL}
+    {.name = "command",
+     .type = VSH_OT_DATA,
+     .flags = 0,
+     .help = N_("Prints global help, command specific help, or help for a group of related commands")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -534,6 +543,8 @@ vshTreePrintInternal(vshControl *ctl,
 
     /* Finally print all children */
     virBufferAddLit(indent, "  ");
+    if (virBufferError(indent))
+        goto cleanup;
     for (i = 0 ; i < num_devices ; i++) {
         const char *parent = (lookup)(i, true, opaque);
 
@@ -543,15 +554,18 @@ vshTreePrintInternal(vshControl *ctl,
                                  false, indent) < 0)
             goto cleanup;
     }
-    virBufferTrim(indent, "  ", -1);
+    if (virBufferTrim(indent, "  ", -1) < 0)
+        goto cleanup;
 
     /* If there was no child device, and we're the last in
      * a list of devices, then print another blank line */
     if (nextlastdev == -1 && devid == lastdev)
         vshPrint(ctl, "%s\n", virBufferCurrentContent(indent));
 
-    if (!root)
-        virBufferTrim(indent, NULL, 2);
+    if (!root) {
+        if (virBufferTrim(indent, NULL, 2) < 0)
+            goto cleanup;
+    }
     ret = 0;
 cleanup:
     return ret;
@@ -691,14 +705,22 @@ vshEditReadBackFile(vshControl *ctl, const char *filename)
  * "cd" command
  */
 static const vshCmdInfo info_cd[] = {
-    {"help", N_("change the current directory")},
-    {"desc", N_("Change the current directory.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("change the current directory")
+    },
+    {.name = "desc",
+     .data = N_("Change the current directory.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_cd[] = {
-    {"dir", VSH_OT_DATA, 0, N_("directory to switch to (default: home or else root)")},
-    {NULL, 0, 0, NULL}
+    {.name = "dir",
+     .type = VSH_OT_DATA,
+     .flags = 0,
+     .help = N_("directory to switch to (default: home or else root)")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -734,9 +756,13 @@ cmdCd(vshControl *ctl, const vshCmd *cmd)
  * "pwd" command
  */
 static const vshCmdInfo info_pwd[] = {
-    {"help", N_("print the current directory")},
-    {"desc", N_("Print the current directory.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("print the current directory")
+    },
+    {.name = "desc",
+     .data = N_("Print the current directory.")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -763,17 +789,37 @@ cmdPwd(vshControl *ctl, const vshCmd *cmd ATTRIBUTE_UNUSED)
  * "echo" command
  */
 static const vshCmdInfo info_echo[] = {
-    {"help", N_("echo arguments")},
-    {"desc", N_("Echo back arguments, possibly with quoting.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("echo arguments")
+    },
+    {.name = "desc",
+     .data = N_("Echo back arguments, possibly with quoting.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_echo[] = {
-    {"shell", VSH_OT_BOOL, 0, N_("escape for shell use")},
-    {"xml", VSH_OT_BOOL, 0, N_("escape for XML use")},
-    {"str", VSH_OT_ALIAS, 0, "string"},
-    {"string", VSH_OT_ARGV, 0, N_("arguments to echo")},
-    {NULL, 0, 0, NULL}
+    {.name = "shell",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("escape for shell use")
+    },
+    {.name = "xml",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("escape for XML use")
+    },
+    {.name = "str",
+     .type = VSH_OT_ALIAS,
+     .flags = 0,
+     .help = "string"
+    },
+    {.name = "string",
+     .type = VSH_OT_ARGV,
+     .flags = 0,
+     .help = N_("arguments to echo")
+    },
+    {.name = NULL}
 };
 
 /* Exists mainly for debugging virsh, but also handy for adding back
@@ -837,9 +883,13 @@ cmdEcho(vshControl *ctl, const vshCmd *cmd)
  * "quit" command
  */
 static const vshCmdInfo info_quit[] = {
-    {"help", N_("quit this interactive terminal")},
-    {"desc", ""},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("quit this interactive terminal")
+    },
+    {.name = "desc",
+     .data = ""
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -922,8 +972,12 @@ vshCmddefOptParse(const vshCmdDef *cmd, uint32_t *opts_need_arg,
     return 0;
 }
 
-static vshCmdOptDef helpopt = {"help", VSH_OT_BOOL, 0,
-                               N_("print help for this function")};
+static vshCmdOptDef helpopt = {
+    .name = "help",
+    .type = VSH_OT_BOOL,
+    .flags = 0,
+    .help = N_("print help for this function")
+};
 static const vshCmdOptDef *
 vshCmddefGetOption(vshControl *ctl, const vshCmdDef *cmd, const char *name,
                    uint32_t *opts_seen, int *opt_index)
@@ -1379,6 +1433,58 @@ vshCommandOptString(const vshCmd *cmd, const char *name, const char **value)
     }
     *value = arg->data;
     return 1;
+}
+
+/**
+ * vshCommandOptStringReq:
+ * @ctl virsh control structure
+ * @cmd command structure
+ * @name option name
+ * @value result (updated to NULL or the option argument)
+ *
+ * Gets a option argument as string.
+ *
+ * Returns 0 on success or when the option is not present and not
+ * required, *value is set to the option argument. On error -1 is
+ * returned and error message printed.
+ */
+int
+vshCommandOptStringReq(vshControl *ctl,
+                       const vshCmd *cmd,
+                       const char *name,
+                       const char **value)
+{
+    vshCmdOpt *arg;
+    int ret;
+    const char *error = NULL;
+
+    /* clear out the value */
+    *value = NULL;
+
+    ret = vshCommandOpt(cmd, name, &arg);
+    /* option is not required and not present */
+    if (ret == 0)
+        return 0;
+    /* this should not be propagated here, just to be sure */
+    if (ret == -1)
+        error = N_("Mandatory option not present");
+
+    if (ret == -2)
+        error = N_("Programming error: Invalid option name");
+
+    if (!arg->data)
+        error = N_("Programming error: Requested option is a boolean");
+
+    if (arg->data && !*arg->data && !(arg->def->flags & VSH_OFLAG_EMPTY_OK))
+        error = N_("Option argument is empty");
+
+    if (error) {
+        vshError(ctl, _("Failed to get option '%s': %s"), name, _(error));
+        return -1;
+    }
+
+    *value = arg->data;
+    return 0;
 }
 
 /**
@@ -2021,26 +2127,6 @@ vshGetTypedParamValue(vshControl *ctl, virTypedParameterPtr item)
     return str;
 }
 
-virTypedParameterPtr
-vshFindTypedParamByName(const char *name, virTypedParameterPtr list, int count)
-{
-    int i = count;
-    virTypedParameterPtr found = list;
-
-    if (!list || !name)
-        return NULL;
-
-    while (i-- > 0) {
-        if (STREQ(name, found->field))
-            return found;
-
-        found++; /* go to next struct in array */
-    }
-
-    /* not found */
-    return NULL;
-}
-
 void
 vshDebug(vshControl *ctl, int level, const char *format, ...)
 {
@@ -2187,10 +2273,7 @@ vshInit(vshControl *ctl)
     ctl->eventLoopStarted = true;
 
     if (ctl->name) {
-        ctl->conn = virConnectOpenAuth(ctl->name,
-                                       virConnectAuthPtrDefault,
-                                       ctl->readonly ? VIR_CONNECT_RO : 0);
-
+        vshReconnect(ctl);
         /* Connecting to a named connection must succeed, but we delay
          * connecting to the default connection until we need it
          * (since the first command might be 'connect' which allows a
@@ -2199,7 +2282,6 @@ vshInit(vshControl *ctl)
          */
         if (!ctl->conn) {
             vshReportError(ctl);
-            vshError(ctl, "%s", _("failed to connect to the hypervisor"));
             return false;
         }
     }
@@ -2257,7 +2339,7 @@ vshOutputLogFile(vshControl *ctl, int log_level, const char *msg_format,
                  va_list ap)
 {
     virBuffer buf = VIR_BUFFER_INITIALIZER;
-    char *str;
+    char *str = NULL;
     size_t len;
     const char *lvl = "";
     time_t stTime;
@@ -2730,7 +2812,7 @@ vshShowVersion(vshControl *ctl ATTRIBUTE_UNUSED)
     vshPrint(ctl, " Interface");
 # if defined(WITH_NETCF)
     vshPrint(ctl, " netcf");
-# elif defined(HAVE_UDEV)
+# elif defined(WITH_UDEV)
     vshPrint(ctl, " udev");
 # endif
 #endif
@@ -2911,13 +2993,43 @@ vshParseArgv(vshControl *ctl, int argc, char **argv)
 }
 
 static const vshCmdDef virshCmds[] = {
-    {"cd", cmdCd, opts_cd, info_cd, VSH_CMD_FLAG_NOCONNECT},
-    {"echo", cmdEcho, opts_echo, info_echo, VSH_CMD_FLAG_NOCONNECT},
-    {"exit", cmdQuit, NULL, info_quit, VSH_CMD_FLAG_NOCONNECT},
-    {"help", cmdHelp, opts_help, info_help, VSH_CMD_FLAG_NOCONNECT},
-    {"pwd", cmdPwd, NULL, info_pwd, VSH_CMD_FLAG_NOCONNECT},
-    {"quit", cmdQuit, NULL, info_quit, VSH_CMD_FLAG_NOCONNECT},
-    {NULL, NULL, NULL, NULL, 0}
+    {.name = "cd",
+     .handler = cmdCd,
+     .opts = opts_cd,
+     .info = info_cd,
+     .flags = VSH_CMD_FLAG_NOCONNECT
+    },
+    {.name = "echo",
+     .handler = cmdEcho,
+     .opts = opts_echo,
+     .info = info_echo,
+     .flags = VSH_CMD_FLAG_NOCONNECT
+    },
+    {.name = "exit",
+     .handler = cmdQuit,
+     .opts = NULL,
+     .info = info_quit,
+     .flags = VSH_CMD_FLAG_NOCONNECT
+    },
+    {.name = "help",
+     .handler = cmdHelp,
+     .opts = opts_help,
+     .info = info_help,
+     .flags = VSH_CMD_FLAG_NOCONNECT
+    },
+    {.name = "pwd",
+     .handler = cmdPwd,
+     .opts = NULL,
+     .info = info_pwd,
+     .flags = VSH_CMD_FLAG_NOCONNECT
+    },
+    {.name = "quit",
+     .handler = cmdQuit,
+     .opts = NULL,
+     .info = info_quit,
+     .flags = VSH_CMD_FLAG_NOCONNECT
+    },
+    {.name = NULL}
 };
 
 static const vshCmdGrp cmdGroups[] = {

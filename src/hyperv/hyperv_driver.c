@@ -2,7 +2,7 @@
 /*
  * hyperv_driver.c: core driver functions for managing Microsoft Hyper-V hosts
  *
- * Copyright (C) 2011 Matthias Bolte <matthias.bolte@googlemail.com>
+ * Copyright (C) 2011-2013 Matthias Bolte <matthias.bolte@googlemail.com>
  * Copyright (C) 2009 Michael Sievers <msievers83@googlemail.com>
  *
  * This library is free software; you can redistribute it and/or
@@ -27,10 +27,10 @@
 #include "datatypes.h"
 #include "domain_conf.h"
 #include "virauth.h"
-#include "util.h"
-#include "memory.h"
-#include "logging.h"
-#include "uuid.h"
+#include "virutil.h"
+#include "viralloc.h"
+#include "virlog.h"
+#include "viruuid.h"
 #include "hyperv_driver.h"
 #include "hyperv_interface_driver.h"
 #include "hyperv_network_driver.h"
@@ -200,14 +200,11 @@ hypervOpen(virConnectPtr conn, virConnectAuthPtr auth, unsigned int flags)
     }
 
     conn->privateData = priv;
-
+    priv = NULL;
     result = VIR_DRV_OPEN_SUCCESS;
 
   cleanup:
-    if (result == VIR_DRV_OPEN_ERROR) {
-        hypervFreePrivate(&priv);
-    }
-
+    hypervFreePrivate(&priv);
     VIR_FREE(username);
     VIR_FREE(password);
     hypervFreeObject(priv, (hypervObject *)computerSystem);

@@ -39,10 +39,10 @@
 
 # define LINUX_NEW_DEVICE_WAIT_TIME 60
 
-# ifdef HAVE_HAL
+# ifdef WITH_HAL
 int halNodeRegister(void);
 # endif
-# ifdef HAVE_UDEV
+# ifdef WITH_UDEV
 int udevNodeRegister(void);
 # endif
 
@@ -77,6 +77,10 @@ int nodeListAllNodeDevices(virConnectPtr conn,
                            virNodeDevicePtr **devices,
                            unsigned int flags);
 virNodeDevicePtr nodeDeviceLookupByName(virConnectPtr conn, const char *name);
+virNodeDevicePtr nodeDeviceLookupSCSIHostByWWN(virConnectPtr conn,
+                                               const char *wwnn,
+                                               const char *wwpn,
+                                               unsigned int flags);
 char *nodeDeviceGetXMLDesc(virNodeDevicePtr dev, unsigned int flags);
 char *nodeDeviceGetParent(virNodeDevicePtr dev);
 int nodeDeviceNumOfCaps(virNodeDevicePtr dev);

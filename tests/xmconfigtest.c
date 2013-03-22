@@ -34,7 +34,7 @@
 #include "xenxs/xen_xm.h"
 #include "testutils.h"
 #include "testutilsxen.h"
-#include "memory.h"
+#include "viralloc.h"
 
 static virCapsPtr caps;
 
@@ -245,7 +245,7 @@ mymain(void)
     DO_TEST("no-source-cdrom", 2);
     DO_TEST("pci-devs", 2);
 
-    virCapabilitiesFree(caps);
+    virObjectUnref(caps);
 
     return ret==0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

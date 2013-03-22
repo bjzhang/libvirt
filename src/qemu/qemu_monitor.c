@@ -1,7 +1,7 @@
 /*
  * qemu_monitor.c: interaction with QEMU monitor console
  *
- * Copyright (C) 2006-2012 Red Hat, Inc.
+ * Copyright (C) 2006-2013 Red Hat, Inc.
  * Copyright (C) 2006 Daniel P. Berrange
  *
  * This library is free software; you can redistribute it and/or
@@ -31,9 +31,9 @@
 #include "qemu_monitor.h"
 #include "qemu_monitor_text.h"
 #include "qemu_monitor_json.h"
-#include "virterror_internal.h"
-#include "memory.h"
-#include "logging.h"
+#include "virerror.h"
+#include "viralloc.h"
+#include "virlog.h"
 #include "virfile.h"
 #include "virprocess.h"
 #include "virobject.h"
@@ -48,9 +48,8 @@
 #define DEBUG_RAW_IO 0
 
 struct _qemuMonitor {
-    virObject object;
+    virObjectLockable parent;
 
-    virMutex lock; /* also used to protect fd */
     virCond notify;
 
     int fd;
@@ -86,9 +85,10 @@ static void qemuMonitorDispose(void *obj);
 
 static int qemuMonitorOnceInit(void)
 {
-    if (!(qemuMonitorClass = virClassNew("qemuMonitor",
-                                          sizeof(qemuMonitor),
-                                          qemuMonitorDispose)))
+    if (!(qemuMonitorClass = virClassNew(virClassForObjectLockable(),
+                                         "qemuMonitor",
+                                         sizeof(qemuMonitor),
+                                         qemuMonitorDispose)))
         return -1;
 
     return 0;
@@ -229,17 +229,6 @@ static char * qemuMonitorEscapeNonPrintable(const char *text)
 }
 #endif
 
-void qemuMonitorLock(qemuMonitorPtr mon)
-{
-    virMutexLock(&mon->lock);
-}
-
-void qemuMonitorUnlock(qemuMonitorPtr mon)
-{
-    virMutexUnlock(&mon->lock);
-}
-
-
 static void qemuMonitorDispose(void *obj)
 {
     qemuMonitorPtr mon = obj;
@@ -247,9 +236,7 @@ static void qemuMonitorDispose(void *obj)
     VIR_DEBUG("mon=%p", mon);
     if (mon->cb && mon->cb->destroy)
         (mon->cb->destroy)(mon, mon->vm);
-    if (virCondDestroy(&mon->notify) < 0)
-    {}
-    virMutexDestroy(&mon->lock);
+    virCondDestroy(&mon->notify);
     VIR_FREE(mon->buffer);
 }
 
@@ -562,12 +549,12 @@ qemuMonitorIO(int watch, int fd, int events, void *opaque) {
     virObjectRef(mon);
 
     /* lock access to the monitor and protect fd */
-    qemuMonitorLock(mon);
+    virObjectLock(mon);
 #if DEBUG_IO
     VIR_DEBUG("Monitor %p I/O on watch %d fd %d events %d", mon, watch, fd, events);
 #endif
     if (mon->fd == -1 || mon->watch == 0) {
-        qemuMonitorUnlock(mon);
+        virObjectUnlock(mon);
         virObjectUnref(mon);
         return;
     }
@@ -665,7 +652,7 @@ qemuMonitorIO(int watch, int fd, int events, void *opaque) {
 
         /* Make sure anyone waiting wakes up now */
         virCondSignal(&mon->notify);
-        qemuMonitorUnlock(mon);
+        virObjectUnlock(mon);
         virObjectUnref(mon);
         VIR_DEBUG("Triggering EOF callback");
         (eofNotify)(mon, vm);
@@ -676,12 +663,12 @@ qemuMonitorIO(int watch, int fd, int events, void *opaque) {
 
         /* Make sure anyone waiting wakes up now */
         virCondSignal(&mon->notify);
-        qemuMonitorUnlock(mon);
+        virObjectUnlock(mon);
         virObjectUnref(mon);
         VIR_DEBUG("Triggering error callback");
         (errorNotify)(mon, vm);
     } else {
-        qemuMonitorUnlock(mon);
+        virObjectUnlock(mon);
         virObjectUnref(mon);
     }
 }
@@ -710,21 +697,14 @@ qemuMonitorOpenInternal(virDomainObjPtr vm,
     if (qemuMonitorInitialize() < 0)
         return NULL;
 
-    if (!(mon = virObjectNew(qemuMonitorClass)))
+    if (!(mon = virObjectLockableNew(qemuMonitorClass)))
         return NULL;
 
-    if (virMutexInit(&mon->lock) < 0) {
-        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
-                       _("cannot initialize monitor mutex"));
-        VIR_FREE(mon);
-        return NULL;
-    }
+    mon->fd = -1;
     if (virCondInit(&mon->notify) < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                        _("cannot initialize monitor condition"));
-        virMutexDestroy(&mon->lock);
-        VIR_FREE(mon);
-        return NULL;
+        goto cleanup;
     }
     mon->fd = fd;
     mon->hasSendFD = hasSendFD;
@@ -733,7 +713,7 @@ qemuMonitorOpenInternal(virDomainObjPtr vm,
     if (json)
         mon->wait_greeting = 1;
     mon->cb = cb;
-    qemuMonitorLock(mon);
+    virObjectLock(mon);
 
     if (virSetCloseExec(mon->fd) < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
@@ -747,6 +727,7 @@ qemuMonitorOpenInternal(virDomainObjPtr vm,
     }
 
 
+    virObjectRef(mon);
     if ((mon->watch = virEventAddHandle(mon->fd,
                                         VIR_EVENT_HANDLE_HANGUP |
                                         VIR_EVENT_HANDLE_ERROR |
@@ -754,16 +735,16 @@ qemuMonitorOpenInternal(virDomainObjPtr vm,
                                         qemuMonitorIO,
                                         mon,
                                         virObjectFreeCallback)) < 0) {
+        virObjectUnref(mon);
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                        _("unable to register monitor events"));
         goto cleanup;
     }
-    virObjectRef(mon);
 
     PROBE(QEMU_MONITOR_NEW,
           "mon=%p refs=%d fd=%d",
-          mon, mon->object.refs, mon->fd);
-    qemuMonitorUnlock(mon);
+          mon, mon->parent.parent.refs, mon->fd);
+    virObjectUnlock(mon);
 
     return mon;
 
@@ -774,7 +755,7 @@ cleanup:
      * so kill the callbacks now.
      */
     mon->cb = NULL;
-    qemuMonitorUnlock(mon);
+    virObjectUnlock(mon);
     /* The caller owns 'fd' on failure */
     mon->fd = -1;
     if (mon->watch)
@@ -833,9 +814,9 @@ void qemuMonitorClose(qemuMonitorPtr mon)
     if (!mon)
         return;
 
-    qemuMonitorLock(mon);
+    virObjectLock(mon);
     PROBE(QEMU_MONITOR_CLOSE,
-          "mon=%p refs=%d", mon, mon->object.refs);
+          "mon=%p refs=%d", mon, mon->parent.parent.refs);
 
     if (mon->fd >= 0) {
         if (mon->watch) {
@@ -866,7 +847,7 @@ void qemuMonitorClose(qemuMonitorPtr mon)
         virCondSignal(&mon->notify);
     }
 
-    qemuMonitorUnlock(mon);
+    virObjectUnlock(mon);
     virObjectUnref(mon);
 }
 
@@ -904,7 +885,7 @@ int qemuMonitorSend(qemuMonitorPtr mon,
           mon, mon->msg->txBuffer, mon->msg->txFD);
 
     while (!mon->msg->finished) {
-        if (virCondWait(&mon->notify, &mon->lock) < 0) {
+        if (virCondWait(&mon->notify, &mon->parent.lock) < 0) {
             virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
                            _("Unable to wait on monitor condition"));
             goto cleanup;
@@ -959,10 +940,10 @@ cleanup:
 #define QEMU_MONITOR_CALLBACK(mon, ret, callback, ...)          \
     do {                                                        \
         virObjectRef(mon);                                      \
-        qemuMonitorUnlock(mon);                                 \
+        virObjectUnlock(mon);                                   \
         if ((mon)->cb && (mon)->cb->callback)                   \
             (ret) = ((mon)->cb->callback)(mon, __VA_ARGS__);    \
-        qemuMonitorLock(mon);                                   \
+        virObjectLock(mon);                                     \
         virObjectUnref(mon);                                    \
     } while (0)
 
@@ -1018,6 +999,16 @@ int qemuMonitorEmitStop(qemuMonitorPtr mon)
     VIR_DEBUG("mon=%p", mon);
 
     QEMU_MONITOR_CALLBACK(mon, ret, domainStop, mon->vm);
+    return ret;
+}
+
+
+int qemuMonitorEmitResume(qemuMonitorPtr mon)
+{
+    int ret = -1;
+    VIR_DEBUG("mon=%p", mon);
+
+    QEMU_MONITOR_CALLBACK(mon, ret, domainResume, mon->vm);
     return ret;
 }
 
@@ -1428,16 +1419,16 @@ qemuMonitorGetBlockInfo(qemuMonitorPtr mon)
 
 struct qemuDomainDiskInfo *
 qemuMonitorBlockInfoLookup(virHashTablePtr blockInfo,
-                           const char *devname)
+                           const char *dev)
 {
     struct qemuDomainDiskInfo *info;
 
-    VIR_DEBUG("blockInfo=%p dev=%s", blockInfo, NULLSTR(devname));
+    VIR_DEBUG("blockInfo=%p dev=%s", blockInfo, NULLSTR(dev));
 
-    if (!(info = virHashLookup(blockInfo, devname))) {
+    if (!(info = virHashLookup(blockInfo, dev))) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("cannot find info for device '%s'"),
-                       NULLSTR(devname));
+                       NULLSTR(dev));
     }
 
     return info;
@@ -2351,6 +2342,78 @@ int qemuMonitorCloseFileHandle(qemuMonitorPtr mon,
         ret = qemuMonitorJSONCloseFileHandle(mon, fdname);
     else
         ret = qemuMonitorTextCloseFileHandle(mon, fdname);
+
+cleanup:
+    if (error) {
+        virSetError(error);
+        virFreeError(error);
+    }
+    return ret;
+}
+
+
+/* Add the open file descriptor FD into the non-negative set FDSET.
+ * If NAME is present, it will be passed along for logging purposes.
+ * Returns the counterpart fd that qemu received, or -1 on error.  */
+int
+qemuMonitorAddFd(qemuMonitorPtr mon, int fdset, int fd, const char *name)
+{
+    int ret = -1;
+    VIR_DEBUG("mon=%p, fdset=%d, fd=%d, name=%s",
+              mon, fdset, fd, NULLSTR(name));
+
+    if (!mon) {
+        virReportError(VIR_ERR_INVALID_ARG, "%s",
+                       _("monitor must not be NULL"));
+        return -1;
+    }
+
+    if (fd < 0 || fdset < 0) {
+        virReportError(VIR_ERR_INVALID_ARG, "%s",
+                       _("fd and fdset must be valid"));
+        return -1;
+    }
+
+    if (!mon->hasSendFD) {
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED,
+                       _("qemu is not using a unix socket monitor, "
+                         "cannot send fd %s"), NULLSTR(name));
+        return -1;
+    }
+
+    if (mon->json)
+        ret = qemuMonitorJSONAddFd(mon, fdset, fd, name);
+    else
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
+                       _("add fd requires JSON monitor"));
+    return ret;
+}
+
+
+/* Remove one of qemu's fds from the given FDSET, or if FD is
+ * negative, remove the entire set.  Preserve any previous error on
+ * entry.  Returns 0 on success, -1 on error.  */
+int
+qemuMonitorRemoveFd(qemuMonitorPtr mon, int fdset, int fd)
+{
+    int ret = -1;
+    virErrorPtr error;
+
+    VIR_DEBUG("mon=%p, fdset=%d, fd=%d", mon, fdset, fd);
+
+    error = virSaveLastError();
+
+    if (!mon) {
+        virReportError(VIR_ERR_INVALID_ARG, "%s",
+                       _("monitor must not be NULL"));
+        goto cleanup;
+    }
+
+    if (mon->json)
+        ret = qemuMonitorJSONRemoveFd(mon, fdset, fd);
+    else
+        virReportError(VIR_ERR_OPERATION_UNSUPPORTED, "%s",
+                       _("remove fd requires JSON monitor"));
 
 cleanup:
     if (error) {

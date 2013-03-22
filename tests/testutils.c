@@ -1,7 +1,7 @@
 /*
  * testutils.c: basic test utils
  *
- * Copyright (C) 2005-2012 Red Hat, Inc.
+ * Copyright (C) 2005-2013 Red Hat, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -27,25 +27,21 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#ifndef WIN32
-# include <sys/wait.h>
-#endif
-#ifdef HAVE_REGEX_H
-# include <regex.h>
-#endif
+#include <sys/wait.h>
+#include <regex.h>
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
 #include <limits.h>
 #include "testutils.h"
 #include "internal.h"
-#include "memory.h"
-#include "util.h"
-#include "threads.h"
-#include "virterror_internal.h"
-#include "buf.h"
-#include "logging.h"
-#include "command.h"
+#include "viralloc.h"
+#include "virutil.h"
+#include "virthread.h"
+#include "virerror.h"
+#include "virbuffer.h"
+#include "virlog.h"
+#include "vircommand.h"
 #include "virrandom.h"
 #include "dirname.h"
 #include "virprocess.h"
@@ -735,7 +731,6 @@ cleanup:
 }
 
 
-#ifdef HAVE_REGEX_H
 int virtTestClearLineRegex(const char *pattern,
                            char *str)
 {
@@ -779,10 +774,3 @@ int virtTestClearLineRegex(const char *pattern,
 
     return 0;
 }
-#else
-int virtTestClearLineRegex(const char *pattern ATTRIBUTE_UNUSED,
-                           char *str ATTRIBUTE_UNUSED)
-{
-    return 0;
-}
-#endif

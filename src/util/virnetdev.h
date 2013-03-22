@@ -26,7 +26,7 @@
 # include "virsocketaddr.h"
 # include "virnetlink.h"
 # include "virmacaddr.h"
-# include "pci.h"
+# include "virpci.h"
 
 int virNetDevExists(const char *brname)
     ATTRIBUTE_NONNULL(1) ATTRIBUTE_RETURN_CHECK;
@@ -104,7 +104,7 @@ int virNetDevGetPhysicalFunction(const char *ifname, char **pfname)
 
 int virNetDevGetVirtualFunctions(const char *pfname,
                                  char ***vfname,
-                                 struct pci_config_address ***virt_fns,
+                                 virPCIDeviceAddressPtr **virt_fns,
                                  unsigned int *n_vfname)
     ATTRIBUTE_NONNULL(1) ATTRIBUTE_NONNULL(2) ATTRIBUTE_NONNULL(3)
     ATTRIBUTE_NONNULL(4) ATTRIBUTE_RETURN_CHECK;

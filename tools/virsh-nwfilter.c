@@ -32,10 +32,10 @@
 #include <libxml/xmlsave.h>
 
 #include "internal.h"
-#include "buf.h"
-#include "memory.h"
-#include "util.h"
-#include "xml.h"
+#include "virbuffer.h"
+#include "viralloc.h"
+#include "virutil.h"
+#include "virxml.h"
 
 virNWFilterPtr
 vshCommandOptNWFilterBy(vshControl *ctl, const vshCmd *cmd,
@@ -49,7 +49,7 @@ vshCommandOptNWFilterBy(vshControl *ctl, const vshCmd *cmd,
     if (!vshCmdHasOption(ctl, cmd, optname))
         return NULL;
 
-    if (vshCommandOptString(cmd, optname, &n) <= 0)
+    if (vshCommandOptStringReq(ctl, cmd, optname, &n) < 0)
         return NULL;
 
     vshDebug(ctl, VSH_ERR_INFO, "%s: found option <%s>: %s\n",
@@ -81,14 +81,22 @@ vshCommandOptNWFilterBy(vshControl *ctl, const vshCmd *cmd,
  * "nwfilter-define" command
  */
 static const vshCmdInfo info_nwfilter_define[] = {
-    {"help", N_("define or update a network filter from an XML file")},
-    {"desc", N_("Define a new network filter or update an existing one.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("define or update a network filter from an XML file")
+    },
+    {.name = "desc",
+     .data = N_("Define a new network filter or update an existing one.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_nwfilter_define[] = {
-    {"file", VSH_OT_DATA, VSH_OFLAG_REQ, N_("file containing an XML network filter description")},
-    {NULL, 0, 0, NULL}
+    {.name = "file",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("file containing an XML network filter description")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -99,7 +107,7 @@ cmdNWFilterDefine(vshControl *ctl, const vshCmd *cmd)
     bool ret = true;
     char *buffer;
 
-    if (vshCommandOptString(cmd, "file", &from) <= 0)
+    if (vshCommandOptStringReq(ctl, cmd, "file", &from) < 0)
         return false;
 
     if (virFileReadAll(from, VSH_MAX_XML_FILE, &buffer) < 0)
@@ -123,14 +131,22 @@ cmdNWFilterDefine(vshControl *ctl, const vshCmd *cmd)
  * "nwfilter-undefine" command
  */
 static const vshCmdInfo info_nwfilter_undefine[] = {
-    {"help", N_("undefine a network filter")},
-    {"desc", N_("Undefine a given network filter.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("undefine a network filter")
+    },
+    {.name = "desc",
+     .data = N_("Undefine a given network filter.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_nwfilter_undefine[] = {
-    {"nwfilter", VSH_OT_DATA, VSH_OFLAG_REQ, N_("network filter name or uuid")},
-    {NULL, 0, 0, NULL}
+    {.name = "nwfilter",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("network filter name or uuid")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -158,14 +174,22 @@ cmdNWFilterUndefine(vshControl *ctl, const vshCmd *cmd)
  * "nwfilter-dumpxml" command
  */
 static const vshCmdInfo info_nwfilter_dumpxml[] = {
-    {"help", N_("network filter information in XML")},
-    {"desc", N_("Output the network filter information as an XML dump to stdout.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("network filter information in XML")
+    },
+    {.name = "desc",
+     .data = N_("Output the network filter information as an XML dump to stdout.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_nwfilter_dumpxml[] = {
-    {"nwfilter", VSH_OT_DATA, VSH_OFLAG_REQ, N_("network filter name or uuid")},
-    {NULL, 0, 0, NULL}
+    {.name = "nwfilter",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("network filter name or uuid")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -322,13 +346,17 @@ cleanup:
  * "nwfilter-list" command
  */
 static const vshCmdInfo info_nwfilter_list[] = {
-    {"help", N_("list network filters")},
-    {"desc", N_("Returns list of network filters.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("list network filters")
+    },
+    {.name = "desc",
+     .data = N_("Returns list of network filters.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_nwfilter_list[] = {
-    {NULL, 0, 0, NULL}
+    {.name = NULL}
 };
 
 static bool
@@ -362,14 +390,22 @@ cmdNWFilterList(vshControl *ctl, const vshCmd *cmd ATTRIBUTE_UNUSED)
  * "nwfilter-edit" command
  */
 static const vshCmdInfo info_nwfilter_edit[] = {
-    {"help", N_("edit XML configuration for a network filter")},
-    {"desc", N_("Edit the XML configuration for a network filter.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("edit XML configuration for a network filter")
+    },
+    {.name = "desc",
+     .data = N_("Edit the XML configuration for a network filter.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_nwfilter_edit[] = {
-    {"nwfilter", VSH_OT_DATA, VSH_OFLAG_REQ, N_("network filter name or uuid")},
-    {NULL, 0, 0, NULL}
+    {.name = "nwfilter",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("network filter name or uuid")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -411,15 +447,35 @@ cleanup:
 }
 
 const vshCmdDef nwfilterCmds[] = {
-    {"nwfilter-define", cmdNWFilterDefine, opts_nwfilter_define,
-     info_nwfilter_define, 0},
-    {"nwfilter-dumpxml", cmdNWFilterDumpXML, opts_nwfilter_dumpxml,
-     info_nwfilter_dumpxml, 0},
-    {"nwfilter-edit", cmdNWFilterEdit, opts_nwfilter_edit,
-     info_nwfilter_edit, 0},
-    {"nwfilter-list", cmdNWFilterList, opts_nwfilter_list,
-     info_nwfilter_list, 0},
-    {"nwfilter-undefine", cmdNWFilterUndefine, opts_nwfilter_undefine,
-     info_nwfilter_undefine, 0},
-    {NULL, NULL, NULL, NULL, 0}
+    {.name = "nwfilter-define",
+     .handler = cmdNWFilterDefine,
+     .opts = opts_nwfilter_define,
+     .info = info_nwfilter_define,
+     .flags = 0
+    },
+    {.name = "nwfilter-dumpxml",
+     .handler = cmdNWFilterDumpXML,
+     .opts = opts_nwfilter_dumpxml,
+     .info = info_nwfilter_dumpxml,
+     .flags = 0
+    },
+    {.name = "nwfilter-edit",
+     .handler = cmdNWFilterEdit,
+     .opts = opts_nwfilter_edit,
+     .info = info_nwfilter_edit,
+     .flags = 0
+    },
+    {.name = "nwfilter-list",
+     .handler = cmdNWFilterList,
+     .opts = opts_nwfilter_list,
+     .info = info_nwfilter_list,
+     .flags = 0
+    },
+    {.name = "nwfilter-undefine",
+     .handler = cmdNWFilterUndefine,
+     .opts = opts_nwfilter_undefine,
+     .info = info_nwfilter_undefine,
+     .flags = 0
+    },
+    {.name = NULL}
 };

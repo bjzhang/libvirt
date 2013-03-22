@@ -1,7 +1,7 @@
 /*
  * openvz_driver.c: core driver methods for managing OpenVZ VEs
  *
- * Copyright (C) 2010-2012 Red Hat, Inc.
+ * Copyright (C) 2010-2013 Red Hat, Inc.
  * Copyright (C) 2006, 2007 Binary Karma
  * Copyright (C) 2006 Shuveb Hussain
  * Copyright (C) 2007 Anoop Joe Cyriac
@@ -37,7 +37,6 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
-#include <sys/utsname.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <paths.h>
@@ -45,21 +44,21 @@
 #include <stdio.h>
 #include <sys/wait.h>
 
-#include "virterror_internal.h"
+#include "virerror.h"
 #include "datatypes.h"
 #include "openvz_driver.h"
 #include "openvz_util.h"
-#include "buf.h"
-#include "util.h"
+#include "virbuffer.h"
+#include "virutil.h"
 #include "openvz_conf.h"
 #include "nodeinfo.h"
-#include "memory.h"
+#include "viralloc.h"
 #include "virfile.h"
 #include "virtypedparam.h"
-#include "logging.h"
-#include "command.h"
+#include "virlog.h"
+#include "vircommand.h"
 #include "viruri.h"
-#include "stats_linux.h"
+#include "virstatslinux.h"
 
 #define VIR_FROM_THIS VIR_FROM_OPENVZ
 
@@ -241,9 +240,8 @@ openvzDomainGetHostname(virDomainPtr dom, unsigned int flags)
     virDomainObjPtr vm;
 
     virCheckFlags(0, NULL);
-
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -265,7 +263,7 @@ openvzDomainGetHostname(virDomainPtr dom, unsigned int flags)
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return hostname;
 
 error:
@@ -281,7 +279,7 @@ static virDomainPtr openvzDomainLookupByID(virConnectPtr conn,
     virDomainPtr dom = NULL;
 
     openvzDriverLock(driver);
-    vm = virDomainFindByID(&driver->domains, id);
+    vm = virDomainObjListFindByID(driver->domains, id);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -295,7 +293,7 @@ static virDomainPtr openvzDomainLookupByID(virConnectPtr conn,
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return dom;
 }
 
@@ -314,7 +312,7 @@ static char *openvzGetOSType(virDomainPtr dom)
     char *ret = NULL;
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -327,7 +325,7 @@ static char *openvzGetOSType(virDomainPtr dom)
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -339,7 +337,7 @@ static virDomainPtr openvzDomainLookupByUUID(virConnectPtr conn,
     virDomainPtr dom = NULL;
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -353,7 +351,7 @@ static virDomainPtr openvzDomainLookupByUUID(virConnectPtr conn,
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return dom;
 }
 
@@ -364,7 +362,7 @@ static virDomainPtr openvzDomainLookupByName(virConnectPtr conn,
     virDomainPtr dom = NULL;
 
     openvzDriverLock(driver);
-    vm = virDomainFindByName(&driver->domains, name);
+    vm = virDomainObjListFindByName(driver->domains, name);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -378,7 +376,7 @@ static virDomainPtr openvzDomainLookupByName(virConnectPtr conn,
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return dom;
 }
 
@@ -390,7 +388,7 @@ static int openvzDomainGetInfo(virDomainPtr dom,
     int ret = -1;
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -420,7 +418,7 @@ static int openvzDomainGetInfo(virDomainPtr dom,
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -438,7 +436,7 @@ openvzDomainGetState(virDomainPtr dom,
     virCheckFlags(0, -1);
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -451,7 +449,7 @@ openvzDomainGetState(virDomainPtr dom,
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -463,7 +461,7 @@ static int openvzDomainIsActive(virDomainPtr dom)
     int ret = -1;
 
     openvzDriverLock(driver);
-    obj = virDomainFindByUUID(&driver->domains, dom->uuid);
+    obj = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
     if (!obj) {
         virReportError(VIR_ERR_NO_DOMAIN, NULL);
@@ -473,7 +471,7 @@ static int openvzDomainIsActive(virDomainPtr dom)
 
 cleanup:
     if (obj)
-        virDomainObjUnlock(obj);
+        virObjectUnlock(obj);
     return ret;
 }
 
@@ -485,7 +483,7 @@ static int openvzDomainIsPersistent(virDomainPtr dom)
     int ret = -1;
 
     openvzDriverLock(driver);
-    obj = virDomainFindByUUID(&driver->domains, dom->uuid);
+    obj = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
     if (!obj) {
         virReportError(VIR_ERR_NO_DOMAIN, NULL);
@@ -495,7 +493,7 @@ static int openvzDomainIsPersistent(virDomainPtr dom)
 
 cleanup:
     if (obj)
-        virDomainObjUnlock(obj);
+        virObjectUnlock(obj);
     return ret;
 }
 
@@ -512,7 +510,7 @@ static char *openvzDomainGetXMLDesc(virDomainPtr dom, unsigned int flags) {
     /* Flags checked by virDomainDefFormat */
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -525,7 +523,7 @@ static char *openvzDomainGetXMLDesc(virDomainPtr dom, unsigned int flags) {
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -556,7 +554,7 @@ static int openvzDomainSuspend(virDomainPtr dom) {
     int ret = -1;
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -583,7 +581,7 @@ static int openvzDomainSuspend(virDomainPtr dom) {
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -594,7 +592,7 @@ static int openvzDomainResume(virDomainPtr dom) {
   int ret = -1;
 
   openvzDriverLock(driver);
-  vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+  vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
   openvzDriverUnlock(driver);
 
   if (!vm) {
@@ -621,7 +619,7 @@ static int openvzDomainResume(virDomainPtr dom) {
 
 cleanup:
   if (vm)
-      virDomainObjUnlock(vm);
+      virObjectUnlock(vm);
   return ret;
 }
 
@@ -637,7 +635,7 @@ openvzDomainShutdownFlags(virDomainPtr dom,
     virCheckFlags(0, -1);
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -666,7 +664,7 @@ openvzDomainShutdownFlags(virDomainPtr dom,
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -688,7 +686,7 @@ static int openvzDomainReboot(virDomainPtr dom,
     virCheckFlags(0, -1);
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -715,7 +713,7 @@ static int openvzDomainReboot(virDomainPtr dom,
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -962,15 +960,16 @@ openvzDomainDefineXML(virConnectPtr conn, const char *xml)
                                          VIR_DOMAIN_XML_INACTIVE)) == NULL)
         goto cleanup;
 
-    vm = virDomainFindByName(&driver->domains, vmdef->name);
+    vm = virDomainObjListFindByName(driver->domains, vmdef->name);
     if (vm) {
         virReportError(VIR_ERR_OPERATION_FAILED,
                        _("Already an OPENVZ VM active with the id '%s'"),
                        vmdef->name);
         goto cleanup;
     }
-    if (!(vm = virDomainAssignDef(driver->caps,
-                                  &driver->domains, vmdef, false)))
+    if (!(vm = virDomainObjListAdd(driver->domains,
+                                   driver->caps,
+                                   vmdef, 0, NULL)))
         goto cleanup;
     vmdef = NULL;
     vm->persistent = 1;
@@ -1005,7 +1004,7 @@ openvzDomainDefineXML(virConnectPtr conn, const char *xml)
     if (vm->def->maxvcpus > 0) {
         if (openvzDomainSetVcpusInternal(vm, vm->def->maxvcpus) < 0) {
             virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
-                           _("Could not set number of virtual cpu"));
+                           _("Could not set number of vCPUs"));
              goto cleanup;
         }
     }
@@ -1025,7 +1024,7 @@ openvzDomainDefineXML(virConnectPtr conn, const char *xml)
 cleanup:
     virDomainDefFree(vmdef);
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     openvzDriverUnlock(driver);
     return dom;
 }
@@ -1048,15 +1047,18 @@ openvzDomainCreateXML(virConnectPtr conn, const char *xml,
                                          VIR_DOMAIN_XML_INACTIVE)) == NULL)
         goto cleanup;
 
-    vm = virDomainFindByName(&driver->domains, vmdef->name);
+    vm = virDomainObjListFindByName(driver->domains, vmdef->name);
     if (vm) {
         virReportError(VIR_ERR_OPERATION_FAILED,
                        _("Already an OPENVZ VM defined with the id '%s'"),
                        vmdef->name);
         goto cleanup;
     }
-    if (!(vm = virDomainAssignDef(driver->caps,
-                                  &driver->domains, vmdef, false)))
+    if (!(vm = virDomainObjListAdd(driver->domains,
+                                   driver->caps,
+                                   vmdef,
+                                   VIR_DOMAIN_OBJ_LIST_ADD_CHECK_LIVE,
+                                   NULL)))
         goto cleanup;
     vmdef = NULL;
     /* All OpenVZ domains seem to be persistent - this is a bit of a violation
@@ -1098,7 +1100,7 @@ openvzDomainCreateXML(virConnectPtr conn, const char *xml,
     if (vm->def->maxvcpus > 0) {
         if (openvzDomainSetVcpusInternal(vm, vm->def->maxvcpus) < 0) {
             virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
-                           _("Could not set number of virtual cpu"));
+                           _("Could not set number of vCPUs"));
             goto cleanup;
         }
     }
@@ -1110,7 +1112,7 @@ openvzDomainCreateXML(virConnectPtr conn, const char *xml,
 cleanup:
     virDomainDefFree(vmdef);
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     openvzDriverUnlock(driver);
     return dom;
 }
@@ -1127,7 +1129,7 @@ openvzDomainCreateWithFlags(virDomainPtr dom, unsigned int flags)
     virCheckFlags(0, -1);
 
     openvzDriverLock(driver);
-    vm = virDomainFindByName(&driver->domains, dom->name);
+    vm = virDomainObjListFindByName(driver->domains, dom->name);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -1158,7 +1160,7 @@ openvzDomainCreateWithFlags(virDomainPtr dom, unsigned int flags)
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -1181,7 +1183,7 @@ openvzDomainUndefineFlags(virDomainPtr dom,
     virCheckFlags(0, -1);
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     if (!vm) {
         virReportError(VIR_ERR_NO_DOMAIN, "%s",
                        _("no domain with matching uuid"));
@@ -1199,7 +1201,7 @@ openvzDomainUndefineFlags(virDomainPtr dom,
     if (virDomainObjIsActive(vm)) {
         vm->persistent = 0;
     } else {
-        virDomainRemoveInactive(&driver->domains, vm);
+        virDomainObjListRemove(driver->domains, vm);
         vm = NULL;
     }
 
@@ -1207,7 +1209,7 @@ openvzDomainUndefineFlags(virDomainPtr dom,
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     openvzDriverUnlock(driver);
     return ret;
 }
@@ -1228,7 +1230,7 @@ openvzDomainSetAutostart(virDomainPtr dom, int autostart)
     int ret = -1;
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -1245,7 +1247,7 @@ openvzDomainSetAutostart(virDomainPtr dom, int autostart)
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -1258,7 +1260,7 @@ openvzDomainGetAutostart(virDomainPtr dom, int *autostart)
     int ret = -1;
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -1282,7 +1284,7 @@ cleanup:
     VIR_FREE(value);
 
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -1353,7 +1355,7 @@ static int openvzDomainSetVcpusFlags(virDomainPtr dom, unsigned int nvcpus,
     }
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -1364,16 +1366,21 @@ static int openvzDomainSetVcpusFlags(virDomainPtr dom, unsigned int nvcpus,
 
     if (nvcpus <= 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
-                       _("VCPUs should be >= 1"));
+                       _("Number of vCPUs should be >= 1"));
         goto cleanup;
     }
 
-    openvzDomainSetVcpusInternal(vm, nvcpus);
+    if (openvzDomainSetVcpusInternal(vm, nvcpus) < 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                       _("Could not set number of vCPUs"));
+        goto cleanup;
+    }
+
     ret = 0;
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -1440,7 +1447,7 @@ static virDrvOpenStatus openvzOpen(virConnectPtr conn,
         return VIR_DRV_OPEN_ERROR;
     }
 
-    if (virDomainObjListInit(&driver->domains) < 0)
+    if (!(driver->domains = virDomainObjListNew()))
         goto cleanup;
 
     if (!(driver->caps = openvzCapsInit()))
@@ -1549,7 +1556,7 @@ static int openvzNumDomains(virConnectPtr conn) {
     int n;
 
     openvzDriverLock(driver);
-    n = virDomainObjListNumOfDomains(&driver->domains, 1);
+    n = virDomainObjListNumOfDomains(driver->domains, 1);
     openvzDriverUnlock(driver);
 
     return n;
@@ -1663,7 +1670,7 @@ static int openvzNumDefinedDomains(virConnectPtr conn) {
     int n;
 
     openvzDriverLock(driver);
-    n = virDomainObjListNumOfDomains(&driver->domains, 0);
+    n = virDomainObjListNumOfDomains(driver->domains, 0);
     openvzDriverUnlock(driver);
 
     return n;
@@ -1952,7 +1959,7 @@ openvzDomainInterfaceStats(virDomainPtr dom,
     int ret = -1;
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     openvzDriverUnlock(driver);
 
     if (!vm) {
@@ -1986,7 +1993,7 @@ openvzDomainInterfaceStats(virDomainPtr dom,
 
 cleanup:
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -2053,14 +2060,14 @@ openvzDomainUpdateDeviceFlags(virDomainPtr dom, const char *xml,
                   VIR_DOMAIN_DEVICE_MODIFY_CONFIG, -1);
 
     openvzDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
-    vmdef = vm->def;
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
 
     if (!vm) {
         virReportError(VIR_ERR_NO_DOMAIN, "%s",
                        _("no domain with matching uuid"));
         goto cleanup;
     }
+    vmdef = vm->def;
 
     if (virStrToLong_i(vmdef->name, NULL, 10, &veid) < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
@@ -2091,7 +2098,7 @@ cleanup:
     openvzDriverUnlock(driver);
     virDomainDeviceDefFree(dev);
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
@@ -2106,7 +2113,7 @@ openvzListAllDomains(virConnectPtr conn,
     virCheckFlags(VIR_CONNECT_LIST_DOMAINS_FILTERS_ALL, -1);
 
     openvzDriverLock(driver);
-    ret = virDomainList(conn, driver->domains.objs, domains, flags);
+    ret = virDomainObjListExport(driver->domains, conn, domains, flags);
     openvzDriverUnlock(driver);
 
     return ret;

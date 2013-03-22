@@ -1,7 +1,7 @@
 /*
  * storage_backend.c: internal storage driver backend contract
  *
- * Copyright (C) 2007-2012 Red Hat, Inc.
+ * Copyright (C) 2007-2013 Red Hat, Inc.
  * Copyright (C) 2007-2008 Daniel P. Berrange
  *
  * This library is free software; you can redistribute it and/or
@@ -25,9 +25,7 @@
 
 #include <string.h>
 #include <stdio.h>
-#if HAVE_REGEX_H
-# include <regex.h>
-#endif
+#include <regex.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -41,20 +39,20 @@
 # include <linux/fs.h>
 #endif
 
-#if HAVE_SELINUX
+#if WITH_SELINUX
 # include <selinux/selinux.h>
 #endif
 
 #include "datatypes.h"
-#include "virterror_internal.h"
-#include "util.h"
-#include "memory.h"
+#include "virerror.h"
+#include "virutil.h"
+#include "viralloc.h"
 #include "internal.h"
 #include "secret_conf.h"
-#include "uuid.h"
-#include "storage_file.h"
+#include "viruuid.h"
+#include "virstoragefile.h"
 #include "storage_backend.h"
-#include "logging.h"
+#include "virlog.h"
 #include "virfile.h"
 #include "stat-time.h"
 
@@ -141,7 +139,7 @@ virStorageBackendCopyToFD(virStorageVolDefPtr vol,
     size_t rbytes = READ_BLOCK_SIZE_DEFAULT;
     size_t wbytes = 0;
     int interval;
-    char *zerobuf;
+    char *zerobuf = NULL;
     char *buf = NULL;
     struct stat st;
 
@@ -533,24 +531,6 @@ cleanup:
     return ret;
 }
 
-struct hookdata {
-    virStorageVolDefPtr vol;
-    bool skip;
-};
-
-static int virStorageBuildSetUIDHook(void *data) {
-    struct hookdata *tmp = data;
-    virStorageVolDefPtr vol = tmp->vol;
-
-    if (tmp->skip)
-        return 0;
-
-    if (virSetUIDGID(vol->target.perms.uid, vol->target.perms.gid) < 0)
-        return -1;
-
-    return 0;
-}
-
 static int virStorageBackendCreateExecCommand(virStoragePoolObjPtr pool,
                                               virStorageVolDefPtr vol,
                                               virCommandPtr cmd) {
@@ -558,7 +538,6 @@ static int virStorageBackendCreateExecCommand(virStoragePoolObjPtr pool,
     gid_t gid;
     uid_t uid;
     int filecreated = 0;
-    struct hookdata data = {vol, false};
 
     if ((pool->def->type == VIR_STORAGE_POOL_NETFS)
         && (((getuid() == 0)
@@ -567,7 +546,8 @@ static int virStorageBackendCreateExecCommand(virStoragePoolObjPtr pool,
             || ((vol->target.perms.gid != -1)
                 && (vol->target.perms.gid != getgid())))) {
 
-        virCommandSetPreExecHook(cmd, virStorageBuildSetUIDHook, &data);
+        virCommandSetUID(cmd, vol->target.perms.uid);
+        virCommandSetGID(cmd, vol->target.perms.gid);
 
         if (virCommandRun(cmd, NULL) == 0) {
             /* command was successfully run, check if the file was created */
@@ -576,7 +556,9 @@ static int virStorageBackendCreateExecCommand(virStoragePoolObjPtr pool,
         }
     }
 
-    data.skip = true;
+    /* don't change uid/gid if we retry */
+    virCommandSetUID(cmd, -1);
+    virCommandSetGID(cmd, -1);
 
     if (!filecreated) {
         if (virCommandRun(cmd, NULL) < 0) {
@@ -668,8 +650,11 @@ virStorageBackendCreateQemuImg(virConnectPtr conn,
     virCommandPtr cmd = NULL;
     bool do_encryption = (vol->target.encryption != NULL);
     unsigned long long int size_arg;
+    bool preallocate = false;
 
-    virCheckFlags(0, -1);
+    virCheckFlags(VIR_STORAGE_VOL_CREATE_PREALLOC_METADATA, -1);
+
+    preallocate = !!(flags & VIR_STORAGE_VOL_CREATE_PREALLOC_METADATA);
 
     const char *type = virStorageFileFormatTypeToString(vol->target.format);
     const char *backingType = vol->backingStore.path ?
@@ -697,10 +682,22 @@ virStorageBackendCreateQemuImg(virConnectPtr conn,
                        inputvol->target.format);
         return -1;
     }
+    if (preallocate && vol->target.format != VIR_STORAGE_FILE_QCOW2) {
+        virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                       _("metadata preallocation only available with qcow2"));
+        return -1;
+    }
 
     if (vol->backingStore.path) {
         int accessRetCode = -1;
         char *absolutePath = NULL;
+
+        if (preallocate) {
+            virReportError(VIR_ERR_CONFIG_UNSUPPORTED, "%s",
+                           _("metadata preallocation conflicts with backing"
+                             " store"));
+            return -1;
+        }
 
         /* XXX: Not strictly required: qemu-img has an option a different
          * backing store, not really sure what use it serves though, and it
@@ -796,14 +793,15 @@ virStorageBackendCreateQemuImg(virConnectPtr conn,
         virCommandAddArgList(cmd, "convert", "-f", inputType, "-O", type,
                              inputPath, vol->target.path, NULL);
 
-        if (do_encryption) {
-            if (imgformat == QEMU_IMG_BACKING_FORMAT_OPTIONS) {
-                virCommandAddArgList(cmd, "-o", "encryption=on", NULL);
-            } else {
-                virCommandAddArg(cmd, "-e");
-            }
+        if (imgformat == QEMU_IMG_BACKING_FORMAT_OPTIONS &&
+            (do_encryption || preallocate)) {
+            virCommandAddArg(cmd, "-o");
+            virCommandAddArgFormat(cmd, "%s%s%s", do_encryption ? "encryption=on" : "",
+                                   (do_encryption && preallocate) ? "," : "",
+                                   preallocate ? "preallocation=metadata" : "");
+        } else if (do_encryption) {
+            virCommandAddArg(cmd, "-e");
         }
-
     } else if (vol->backingStore.path) {
         virCommandAddArgList(cmd, "create", "-f", type,
                              "-b", vol->backingStore.path, NULL);
@@ -840,12 +838,14 @@ virStorageBackendCreateQemuImg(virConnectPtr conn,
                              vol->target.path, NULL);
         virCommandAddArgFormat(cmd, "%lluK", size_arg);
 
-        if (do_encryption) {
-            if (imgformat == QEMU_IMG_BACKING_FORMAT_OPTIONS) {
-                virCommandAddArgList(cmd, "-o", "encryption=on", NULL);
-            } else {
-                virCommandAddArg(cmd, "-e");
-            }
+        if (imgformat == QEMU_IMG_BACKING_FORMAT_OPTIONS &&
+            (do_encryption || preallocate)) {
+            virCommandAddArg(cmd, "-o");
+            virCommandAddArgFormat(cmd, "%s%s%s", do_encryption ? "encryption=on" : "",
+                                   (do_encryption && preallocate) ? "," : "",
+                                   preallocate ? "preallocation=metadata" : "");
+        } else if (do_encryption) {
+            virCommandAddArg(cmd, "-e");
         }
     }
 
@@ -1159,7 +1159,7 @@ virStorageBackendUpdateVolTargetInfoFD(virStorageVolTargetPtr target,
                                        unsigned long long *capacity)
 {
     struct stat sb;
-#if HAVE_SELINUX
+#if WITH_SELINUX
     security_context_t filecon = NULL;
 #endif
 
@@ -1223,7 +1223,7 @@ virStorageBackendUpdateVolTargetInfoFD(virStorageVolTargetPtr target,
 
     VIR_FREE(target->perms.label);
 
-#if HAVE_SELINUX
+#if WITH_SELINUX
     /* XXX: make this a security driver call */
     if (fgetfilecon_raw(fd, &filecon) == -1) {
         if (errno != ENODATA && errno != ENOTSUP) {

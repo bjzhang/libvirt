@@ -31,7 +31,7 @@
 
 # include "internal.h"
 # include "domain_conf.h"
-# include "threads.h"
+# include "virthread.h"
 
 
 /* OpenVZ commands - Replace with wrapper scripts later? */
@@ -45,7 +45,7 @@ struct openvz_driver {
     virMutex lock;
 
     virCapsPtr caps;
-    virDomainObjList domains;
+    virDomainObjListPtr domains;
     int version;
 };
 

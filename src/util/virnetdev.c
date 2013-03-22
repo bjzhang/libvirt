@@ -25,11 +25,11 @@
 #include "virnetdev.h"
 #include "virmacaddr.h"
 #include "virfile.h"
-#include "virterror_internal.h"
-#include "command.h"
-#include "memory.h"
-#include "pci.h"
-#include "logging.h"
+#include "virerror.h"
+#include "vircommand.h"
+#include "viralloc.h"
+#include "virpci.h"
+#include "virlog.h"
 
 #include <sys/ioctl.h>
 #include <net/if.h>
@@ -980,19 +980,19 @@ virNetDevSysfsDeviceFile(char **pf_sysfs_device_link, const char *ifname,
 int
 virNetDevGetVirtualFunctions(const char *pfname,
                              char ***vfname,
-                             struct pci_config_address ***virt_fns,
+                             virPCIDeviceAddressPtr **virt_fns,
                              unsigned int *n_vfname)
 {
     int ret = -1, i;
     char *pf_sysfs_device_link = NULL;
     char *pci_sysfs_device_link = NULL;
-    char *pciConfigAddr;
+    char *pciConfigAddr = NULL;
 
     if (virNetDevSysfsFile(&pf_sysfs_device_link, pfname, "device") < 0)
         return ret;
 
-    if (pciGetVirtualFunctions(pf_sysfs_device_link, virt_fns,
-                               n_vfname) < 0)
+    if (virPCIGetVirtualFunctions(pf_sysfs_device_link, virt_fns,
+                                  n_vfname) < 0)
         goto cleanup;
 
     if (VIR_ALLOC_N(*vfname, *n_vfname) < 0) {
@@ -1002,22 +1002,22 @@ virNetDevGetVirtualFunctions(const char *pfname,
 
     for (i = 0; i < *n_vfname; i++)
     {
-        if (pciGetDeviceAddrString((*virt_fns)[i]->domain,
-                                   (*virt_fns)[i]->bus,
-                                   (*virt_fns)[i]->slot,
-                                   (*virt_fns)[i]->function,
-                                   &pciConfigAddr) < 0) {
+        if (virPCIGetAddrString((*virt_fns)[i]->domain,
+                                (*virt_fns)[i]->bus,
+                                (*virt_fns)[i]->slot,
+                                (*virt_fns)[i]->function,
+                                &pciConfigAddr) < 0) {
             virReportSystemError(ENOSYS, "%s",
                                  _("Failed to get PCI Config Address String"));
             goto cleanup;
         }
-        if (pciSysfsFile(pciConfigAddr, &pci_sysfs_device_link) < 0) {
+        if (virPCIGetSysfsFile(pciConfigAddr, &pci_sysfs_device_link) < 0) {
             virReportSystemError(ENOSYS, "%s",
                                  _("Failed to get PCI SYSFS file"));
             goto cleanup;
         }
 
-        if (pciDeviceNetName(pci_sysfs_device_link, &((*vfname)[i])) < 0) {
+        if (virPCIGetNetName(pci_sysfs_device_link, &((*vfname)[i])) < 0) {
             VIR_INFO("VF does not have an interface name");
         }
     }
@@ -1053,7 +1053,7 @@ virNetDevIsVirtualFunction(const char *ifname)
     if (virNetDevSysfsFile(&if_sysfs_device_link, ifname, "device") < 0)
         return ret;
 
-    ret = pciDeviceIsVirtualFunction(if_sysfs_device_link);
+    ret = virPCIIsVirtualFunction(if_sysfs_device_link);
 
     VIR_FREE(if_sysfs_device_link);
 
@@ -1086,9 +1086,9 @@ virNetDevGetVirtualFunctionIndex(const char *pfname, const char *vfname,
         return ret;
     }
 
-    ret = pciGetVirtualFunctionIndex(pf_sysfs_device_link,
-                                     vf_sysfs_device_link,
-                                     vf_index);
+    ret = virPCIGetVirtualFunctionIndex(pf_sysfs_device_link,
+                                        vf_sysfs_device_link,
+                                        vf_index);
 
     VIR_FREE(pf_sysfs_device_link);
     VIR_FREE(vf_sysfs_device_link);
@@ -1115,7 +1115,7 @@ virNetDevGetPhysicalFunction(const char *ifname, char **pfname)
     if (virNetDevSysfsDeviceFile(&physfn_sysfs_path, ifname, "physfn") < 0)
         return ret;
 
-    ret = pciDeviceNetName(physfn_sysfs_path, pfname);
+    ret = virPCIGetNetName(physfn_sysfs_path, pfname);
 
     VIR_FREE(physfn_sysfs_path);
 
@@ -1149,7 +1149,7 @@ virNetDevGetVirtualFunctionInfo(const char *vfname, char **pfname,
     if (virNetDevSysfsFile(&vf_sysfs_path, vfname, "device") < 0)
         goto cleanup;
 
-    ret = pciGetVirtualFunctionIndex(pf_sysfs_path, vf_sysfs_path, vf);
+    ret = virPCIGetVirtualFunctionIndex(pf_sysfs_path, vf_sysfs_path, vf);
 
 cleanup:
     if (ret < 0)
@@ -1165,7 +1165,7 @@ cleanup:
 int
 virNetDevGetVirtualFunctions(const char *pfname ATTRIBUTE_UNUSED,
                              char ***vfname ATTRIBUTE_UNUSED,
-                             struct pci_config_address ***virt_fns ATTRIBUTE_UNUSED,
+                             virPCIDeviceAddressPtr **virt_fns ATTRIBUTE_UNUSED,
                              unsigned int *n_vfname ATTRIBUTE_UNUSED)
 {
     virReportSystemError(ENOSYS, "%s",
@@ -1274,6 +1274,21 @@ virNetDevLinkDump(const char *ifname, int ifindex,
         if (nla_put(nl_msg, IFLA_IFNAME, strlen(ifname)+1, ifname) < 0)
             goto buffer_too_small;
     }
+
+# ifdef RTEXT_FILTER_VF
+    /* if this filter exists in the kernel's netlink implementation,
+     * we need to set it, otherwise the response message will not
+     * contain the IFLA_VFINFO_LIST that we're looking for.
+     */
+    {
+        uint32_t ifla_ext_mask = RTEXT_FILTER_VF;
+
+        if (nla_put(nl_msg, IFLA_EXT_MASK,
+                    sizeof(ifla_ext_mask), &ifla_ext_mask) < 0) {
+            goto buffer_too_small;
+        }
+    }
+# endif
 
     if (virNetlinkCommand(nl_msg, recvbuf, &recvbuflen,
                           src_pid, dst_pid, NETLINK_ROUTE, 0) < 0)
@@ -1456,53 +1471,55 @@ static int
 virNetDevParseVfConfig(struct nlattr **tb, int32_t vf, virMacAddrPtr mac,
                        int *vlanid)
 {
-    const char *msg = NULL;
     int rc = -1;
+    struct ifla_vf_mac *vf_mac;
+    struct ifla_vf_vlan *vf_vlan;
+    struct nlattr *tb_vf_info = {NULL, };
+    struct nlattr *tb_vf[IFLA_VF_MAX+1];
+    int found = 0;
+    int rem;
 
-    if (tb[IFLA_VFINFO_LIST]) {
-        struct ifla_vf_mac *vf_mac;
-        struct ifla_vf_vlan *vf_vlan;
-        struct nlattr *tb_vf_info = {NULL, };
-        struct nlattr *tb_vf[IFLA_VF_MAX+1];
-        int found = 0;
-        int rem;
-
-        nla_for_each_nested(tb_vf_info, tb[IFLA_VFINFO_LIST], rem) {
-            if (nla_type(tb_vf_info) != IFLA_VF_INFO)
-                continue;
-
-            if (nla_parse_nested(tb_vf, IFLA_VF_MAX, tb_vf_info,
-                                 ifla_vf_policy)) {
-                msg = _("error parsing IFLA_VF_INFO");
-                goto cleanup;
-            }
-
-            if (tb[IFLA_VF_MAC]) {
-                vf_mac = RTA_DATA(tb_vf[IFLA_VF_MAC]);
-                if (vf_mac && vf_mac->vf == vf)  {
-                    virMacAddrSetRaw(mac, vf_mac->mac);
-                    found = 1;
-                }
-            }
-
-            if (tb[IFLA_VF_VLAN]) {
-                vf_vlan = RTA_DATA(tb_vf[IFLA_VF_VLAN]);
-                if (vf_vlan && vf_vlan->vf == vf)  {
-                    *vlanid = vf_vlan->vlan;
-                    found = 1;
-                }
-            }
-            if (found) {
-                rc = 0;
-                break;
-            }
-        }
+    if (!tb[IFLA_VFINFO_LIST]) {
+        virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                       _("missing IFLA_VF_INFO in netlink response"));
+        goto cleanup;
     }
 
-cleanup:
-    if (msg)
-        virReportError(VIR_ERR_INTERNAL_ERROR, "%s", msg);
+    nla_for_each_nested(tb_vf_info, tb[IFLA_VFINFO_LIST], rem) {
+        if (nla_type(tb_vf_info) != IFLA_VF_INFO)
+            continue;
 
+        if (nla_parse_nested(tb_vf, IFLA_VF_MAX, tb_vf_info,
+                             ifla_vf_policy)) {
+            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                           _("error parsing IFLA_VF_INFO"));
+            goto cleanup;
+        }
+
+        if (tb[IFLA_VF_MAC]) {
+            vf_mac = RTA_DATA(tb_vf[IFLA_VF_MAC]);
+            if (vf_mac && vf_mac->vf == vf)  {
+                virMacAddrSetRaw(mac, vf_mac->mac);
+                found = 1;
+            }
+        }
+
+        if (tb[IFLA_VF_VLAN]) {
+            vf_vlan = RTA_DATA(tb_vf[IFLA_VF_VLAN]);
+            if (vf_vlan && vf_vlan->vf == vf)  {
+                *vlanid = vf_vlan->vlan;
+                found = 1;
+            }
+        }
+        if (found) {
+            rc = 0;
+            goto cleanup;
+        }
+    }
+    virReportError(VIR_ERR_INTERNAL_ERROR,
+                   _("couldn't find IFLA_VF_INFO for VF %d "
+                     "in netlink response"), vf);
+cleanup:
     return rc;
 }
 

@@ -45,6 +45,8 @@ sub fixup_name {
     $name =~ s/Nmi$/NMI/;
     $name =~ s/Pm/PM/;
     $name =~ s/Fstrim$/FSTrim/;
+    $name =~ s/Scsi/SCSI/;
+    $name =~ s/Wwn$/WWN/;
 
     return $name;
 }
@@ -402,7 +404,8 @@ elsif ($opt_b) {
             # node device is special, as it's identified by name
             if ($argtype =~ m/^remote_node_device_/ and
                 !($argtype =~ m/^remote_node_device_lookup_by_name_/) and
-                !($argtype =~ m/^remote_node_device_create_xml_/)) {
+                !($argtype =~ m/^remote_node_device_create_xml_/) and
+                !($argtype =~ m/^remote_node_device_lookup_scsi_host_by_wwn_/)) {
                 $has_node_device = 1;
                 push(@vars_list, "virNodeDevicePtr dev = NULL");
                 push(@getters_list,
@@ -490,8 +493,7 @@ elsif ($opt_b) {
                                         "                                                   $2,\n" .
                                         "                                                   &n$1)) == NULL)\n" .
                                         "        goto cleanup;\n");
-                    push(@free_list, "    virTypedParameterArrayClear($1, n$1);");
-                    push(@free_list, "    VIR_FREE($1);");
+                    push(@free_list, "    virTypedParamsFree($1, n$1);");
                 } elsif ($args_member =~ m/<\S+>;/ or $args_member =~ m/\[\S+\];/) {
                     # just make all other array types fail
                     die "unhandled type for argument value: $args_member";

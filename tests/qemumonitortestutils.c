@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2011-2012 Red Hat, Inc.
+ * Copyright (C) 2011-2013 Red Hat, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -26,13 +26,13 @@
 
 #include "qemumonitortestutils.h"
 
-#include "threads.h"
+#include "virthread.h"
 #include "qemu/qemu_monitor.h"
 #include "rpc/virnetsocket.h"
-#include "memory.h"
-#include "util.h"
-#include "logging.h"
-#include "virterror_internal.h"
+#include "viralloc.h"
+#include "virutil.h"
+#include "virlog.h"
+#include "virerror.h"
 
 #define VIR_FROM_THIS VIR_FROM_NONE
 
@@ -308,6 +308,7 @@ static void qemuMonitorTestWorker(void *opaque)
         virMutexUnlock(&test->lock);
 
         if (virEventRunDefaultImpl() < 0) {
+            virMutexLock(&test->lock);
             test->quit = true;
             break;
         }
@@ -364,17 +365,19 @@ void qemuMonitorTestFree(qemuMonitorTestPtr test)
 
     virObjectUnref(test->server);
     if (test->mon) {
-        qemuMonitorUnlock(test->mon);
+        virObjectUnlock(test->mon);
         qemuMonitorClose(test->mon);
     }
 
     virObjectUnref(test->vm);
 
-    if (test->running)
-        virThreadJoin(&test->thread);
+    virThreadJoin(&test->thread);
 
     if (timer != -1)
         virEventRemoveTimeout(timer);
+
+    VIR_FREE(test->incoming);
+    VIR_FREE(test->outgoing);
 
     for (i = 0 ; i < test->nitems ; i++)
         qemuMonitorTestItemFree(test->items[i]);
@@ -439,6 +442,8 @@ static qemuMonitorCallbacks qemuCallbacks = {
 };
 
 #define QEMU_JSON_GREETING "{\"QMP\": {\"version\": {\"qemu\": {\"micro\": 1, \"minor\": 0, \"major\": 1}, \"package\": \" (qemu-kvm-1.0.1)\"}, \"capabilities\": []}}"
+/* We skip the normal handshake reply of "{\"execute\":\"qmp_capabilities\"}" */
+
 #define QEMU_TEXT_GREETING "QEMU 1.0,1 monitor - type 'help' for more information"
 
 qemuMonitorTestPtr qemuMonitorTestNew(bool json, virCapsPtr caps)
@@ -496,7 +501,7 @@ qemuMonitorTestPtr qemuMonitorTestNew(bool json, virCapsPtr caps)
                                       json ? 1 : 0,
                                       &qemuCallbacks)))
         goto error;
-    qemuMonitorLock(test->mon);
+    virObjectLock(test->mon);
 
     if (virNetSocketAccept(test->server, &test->client) < 0)
         goto error;
@@ -536,6 +541,7 @@ no_memory:
 error:
     VIR_FREE(tmpdir_template);
     qemuMonitorTestFree(test);
+    test = NULL;
     goto cleanup;
 }
 

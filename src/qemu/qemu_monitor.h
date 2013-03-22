@@ -1,7 +1,7 @@
 /*
  * qemu_monitor.h: interaction with QEMU monitor console
  *
- * Copyright (C) 2006-2012 Red Hat, Inc.
+ * Copyright (C) 2006-2013 Red Hat, Inc.
  * Copyright (C) 2006 Daniel P. Berrange
  *
  * This library is free software; you can redistribute it and/or
@@ -28,9 +28,9 @@
 # include "internal.h"
 
 # include "domain_conf.h"
-# include "bitmap.h"
+# include "virbitmap.h"
 # include "virhash.h"
-# include "json.h"
+# include "virjson.h"
 # include "device_conf.h"
 
 typedef struct _qemuMonitor qemuMonitor;
@@ -97,6 +97,8 @@ struct _qemuMonitorCallbacks {
                            virDomainObjPtr vm);
     int (*domainStop)(qemuMonitorPtr mon,
                       virDomainObjPtr vm);
+    int (*domainResume)(qemuMonitorPtr mon,
+                        virDomainObjPtr vm);
     int (*domainRTCChange)(qemuMonitorPtr mon,
                            virDomainObjPtr vm,
                            long long offset);
@@ -158,9 +160,6 @@ void qemuMonitorClose(qemuMonitorPtr mon);
 
 int qemuMonitorSetCapabilities(qemuMonitorPtr mon);
 
-void qemuMonitorLock(qemuMonitorPtr mon);
-void qemuMonitorUnlock(qemuMonitorPtr mon);
-
 int qemuMonitorSetLink(qemuMonitorPtr mon,
                        const char *name,
                        enum virDomainNetInterfaceLinkState state) ;
@@ -187,6 +186,7 @@ int qemuMonitorEmitShutdown(qemuMonitorPtr mon);
 int qemuMonitorEmitReset(qemuMonitorPtr mon);
 int qemuMonitorEmitPowerdown(qemuMonitorPtr mon);
 int qemuMonitorEmitStop(qemuMonitorPtr mon);
+int qemuMonitorEmitResume(qemuMonitorPtr mon);
 int qemuMonitorEmitRTCChange(qemuMonitorPtr mon, long long offset);
 int qemuMonitorEmitWatchdog(qemuMonitorPtr mon, int action);
 int qemuMonitorEmitIOError(qemuMonitorPtr mon,
@@ -439,13 +439,14 @@ int qemuMonitorRemovePCIDevice(qemuMonitorPtr mon,
 int qemuMonitorSendFileHandle(qemuMonitorPtr mon,
                               const char *fdname,
                               int fd);
+int qemuMonitorAddFd(qemuMonitorPtr mon, int fdset, int fd, const char *name);
 
-/* The function preserves previous error and only sets it's own error if no
- * error was set before.
+/* These two functions preserve previous error and only set their own
+ * error if no error was set before.
  */
 int qemuMonitorCloseFileHandle(qemuMonitorPtr mon,
                                const char *fdname);
-
+int qemuMonitorRemoveFd(qemuMonitorPtr mon, int fdset, int fd);
 
 /* XXX do we really want to hardcode 'netstr' as the
  * sendable item here

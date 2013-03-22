@@ -1,4 +1,5 @@
 /*
+ * Copyright (C) 2013 Red Hat, Inc.
  * Copyright (C) 2012 Fujitsu.
  *
  * This library is free software; you can redistribute it and/or
@@ -21,7 +22,7 @@
 
 #include "testutils.h"
 
-#include "bitmap.h"
+#include "virbitmap.h"
 
 static int test1(const void *data ATTRIBUTE_UNUSED)
 {
@@ -29,26 +30,33 @@ static int test1(const void *data ATTRIBUTE_UNUSED)
     int size;
     int bit;
     bool result;
+    int ret = -1;
 
     size = 1024;
     bit = 100;
-    bitmap = virBitmapNew(size);
+    if (!(bitmap = virBitmapNew(size)))
+        goto error;
+
     if (virBitmapSetBit(bitmap, bit) < 0)
-        return -1;
+        goto error;
 
     if (virBitmapGetBit(bitmap, bit, &result) < 0)
-        return -1;
+        goto error;
 
     if (!result)
-        return -1;
+        goto error;
 
     if (virBitmapGetBit(bitmap, bit + 1, &result) < 0)
-        return -1;
+        goto error;
 
     if (result)
-        return -1;
+        goto error;
 
-    return 0;
+    ret = 0;
+
+error:
+    virBitmapFree(bitmap);
+    return ret;
 }
 
 static int
@@ -102,7 +110,8 @@ static int test2(const void *data ATTRIBUTE_UNUSED)
     if (virBitmapCountBits(bitmap) != 48)
         goto error;
 
-    bitsString2 = virBitmapFormat(bitmap);
+    if (!(bitsString2 = virBitmapFormat(bitmap)))
+        goto error;
     if (strcmp(bitsString1, bitsString2))
         goto error;
 
@@ -152,7 +161,7 @@ error:
     return ret;
 }
 
-/* test for virBitmapNextSetBit */
+/* test for virBitmapNextSetBit, virBitmapNextClearBit */
 static int test4(const void *data ATTRIBUTE_UNUSED)
 {
     const char *bitsString = "0, 2-4, 6-10, 12, 14-18, 20, 22, 25";
@@ -161,9 +170,15 @@ static int test4(const void *data ATTRIBUTE_UNUSED)
         0,  2,  3,  4,  6,  7,  8,  9, 10, 12,
         14, 15, 16, 17, 18, 20, 22, 25
     };
-    int npos = 18;
+    int bitsPosInv[] = {
+        1, 5, 11, 13, 19, 21, 23, 24, 26, 27,
+        28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39
+    };
     virBitmapPtr bitmap = NULL;
     int i, j;
+
+    if (ARRAY_CARDINALITY(bitsPos) + ARRAY_CARDINALITY(bitsPosInv) != size)
+        goto error;
 
     /* 1. zero set */
 
@@ -171,7 +186,14 @@ static int test4(const void *data ATTRIBUTE_UNUSED)
     if (!bitmap)
         goto error;
 
-    if (virBitmapNextSetBit(bitmap, -1) >= 0)
+    if (virBitmapNextSetBit(bitmap, -1) != -1)
+        goto error;
+
+    for (i = 0; i < size; i++) {
+        if (virBitmapNextClearBit(bitmap, i - 1) != i)
+            goto error;
+    }
+    if (virBitmapNextClearBit(bitmap, i) != -1)
         goto error;
 
     virBitmapFree(bitmap);
@@ -187,27 +209,39 @@ static int test4(const void *data ATTRIBUTE_UNUSED)
     j = 0;
     i = -1;
 
-    while (j < npos) {
+    while (j < ARRAY_CARDINALITY(bitsPos)) {
         i = virBitmapNextSetBit(bitmap, i);
         if (i != bitsPos[j++])
             goto error;
     }
 
-    if (virBitmapNextSetBit(bitmap, i) > 0)
+    if (virBitmapNextSetBit(bitmap, i) != -1)
+        goto error;
+
+    j = 0;
+    i = -1;
+
+    while (j < ARRAY_CARDINALITY(bitsPosInv)) {
+        i = virBitmapNextClearBit(bitmap, i);
+        if (i != bitsPosInv[j++])
+            goto error;
+    }
+
+    if (virBitmapNextClearBit(bitmap, i) != -1)
         goto error;
 
     /* 3. full set */
 
-    i = -1;
     virBitmapSetAll(bitmap);
 
-    for (j = 0; j < size; j++) {
-        i = virBitmapNextSetBit(bitmap, i);
-        if (i != j)
+    for (i = 0; i < size; i++) {
+        if (virBitmapNextSetBit(bitmap, i - 1) != i)
             goto error;
     }
+    if (virBitmapNextSetBit(bitmap, i) != -1)
+        goto error;
 
-    if (virBitmapNextSetBit(bitmap, i) > 0)
+    if (virBitmapNextClearBit(bitmap, -1) != -1)
         goto error;
 
     virBitmapFree(bitmap);

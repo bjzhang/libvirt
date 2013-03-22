@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2010-2011 Red Hat, Inc.
+ * Copyright (C) 2010-2013 Red Hat, Inc.
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Lesser General Public
@@ -21,7 +21,7 @@
 
 #include "security_nop.h"
 
-#include "virterror_internal.h"
+#include "virerror.h"
 
 #define VIR_FROM_THIS VIR_FROM_SECURITY
 
@@ -84,14 +84,16 @@ static int virSecurityDomainSetImageLabelNop(virSecurityManagerPtr mgr ATTRIBUTE
 
 static int virSecurityDomainRestoreHostdevLabelNop(virSecurityManagerPtr mgr ATTRIBUTE_UNUSED,
                                                    virDomainDefPtr vm ATTRIBUTE_UNUSED,
-                                                   virDomainHostdevDefPtr dev ATTRIBUTE_UNUSED)
+                                                   virDomainHostdevDefPtr dev ATTRIBUTE_UNUSED,
+                                                   const char *vroot ATTRIBUTE_UNUSED)
 {
     return 0;
 }
 
 static int virSecurityDomainSetHostdevLabelNop(virSecurityManagerPtr mgr ATTRIBUTE_UNUSED,
                                                virDomainDefPtr vm ATTRIBUTE_UNUSED,
-                                               virDomainHostdevDefPtr dev ATTRIBUTE_UNUSED)
+                                               virDomainHostdevDefPtr dev ATTRIBUTE_UNUSED,
+                                               const char *vroot ATTRIBUTE_UNUSED)
 {
     return 0;
 }
@@ -155,6 +157,13 @@ static int virSecurityDomainSetProcessLabelNop(virSecurityManagerPtr mgr ATTRIBU
     return 0;
 }
 
+static int virSecurityDomainSetChildProcessLabelNop(virSecurityManagerPtr mgr ATTRIBUTE_UNUSED,
+                                                    virDomainDefPtr vm ATTRIBUTE_UNUSED,
+                                                    virCommandPtr cmd ATTRIBUTE_UNUSED)
+{
+    return 0;
+}
+
 static int virSecurityDomainVerifyNop(virSecurityManagerPtr mgr ATTRIBUTE_UNUSED,
                                       virDomainDefPtr def ATTRIBUTE_UNUSED)
 {
@@ -205,6 +214,7 @@ virSecurityDriver virSecurityDriverNop = {
 
     .domainGetSecurityProcessLabel      = virSecurityDomainGetProcessLabelNop,
     .domainSetSecurityProcessLabel      = virSecurityDomainSetProcessLabelNop,
+    .domainSetSecurityChildProcessLabel = virSecurityDomainSetChildProcessLabelNop,
 
     .domainSetSecurityAllLabel          = virSecurityDomainSetAllLabelNop,
     .domainRestoreSecurityAllLabel      = virSecurityDomainRestoreAllLabelNop,

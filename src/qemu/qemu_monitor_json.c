@@ -1,7 +1,7 @@
 /*
  * qemu_monitor_json.c: interaction with QEMU monitor console
  *
- * Copyright (C) 2006-2012 Red Hat, Inc.
+ * Copyright (C) 2006-2013 Red Hat, Inc.
  * Copyright (C) 2006 Daniel P. Berrange
  *
  * This library is free software; you can redistribute it and/or
@@ -35,12 +35,12 @@
 #include "qemu_monitor_json.h"
 #include "qemu_command.h"
 #include "qemu_capabilities.h"
-#include "memory.h"
-#include "logging.h"
+#include "viralloc.h"
+#include "virlog.h"
 #include "driver.h"
 #include "datatypes.h"
-#include "virterror_internal.h"
-#include "json.h"
+#include "virerror.h"
+#include "virjson.h"
 
 #ifdef WITH_DTRACE_PROBES
 # include "libvirt_qemu_probes.h"
@@ -55,6 +55,7 @@ static void qemuMonitorJSONHandleShutdown(qemuMonitorPtr mon, virJSONValuePtr da
 static void qemuMonitorJSONHandleReset(qemuMonitorPtr mon, virJSONValuePtr data);
 static void qemuMonitorJSONHandlePowerdown(qemuMonitorPtr mon, virJSONValuePtr data);
 static void qemuMonitorJSONHandleStop(qemuMonitorPtr mon, virJSONValuePtr data);
+static void qemuMonitorJSONHandleResume(qemuMonitorPtr mon, virJSONValuePtr data);
 static void qemuMonitorJSONHandleRTCChange(qemuMonitorPtr mon, virJSONValuePtr data);
 static void qemuMonitorJSONHandleWatchdog(qemuMonitorPtr mon, virJSONValuePtr data);
 static void qemuMonitorJSONHandleIOError(qemuMonitorPtr mon, virJSONValuePtr data);
@@ -87,6 +88,7 @@ static qemuEventHandler eventHandlers[] = {
     { "DEVICE_TRAY_MOVED", qemuMonitorJSONHandleTrayChange, },
     { "POWERDOWN", qemuMonitorJSONHandlePowerdown, },
     { "RESET", qemuMonitorJSONHandleReset, },
+    { "RESUME", qemuMonitorJSONHandleResume, },
     { "RTC_CHANGE", qemuMonitorJSONHandleRTCChange, },
     { "SHUTDOWN", qemuMonitorJSONHandleShutdown, },
     { "SPICE_CONNECTED", qemuMonitorJSONHandleSPICEConnect, },
@@ -587,6 +589,11 @@ static void qemuMonitorJSONHandlePowerdown(qemuMonitorPtr mon, virJSONValuePtr d
 static void qemuMonitorJSONHandleStop(qemuMonitorPtr mon, virJSONValuePtr data ATTRIBUTE_UNUSED)
 {
     qemuMonitorEmitStop(mon);
+}
+
+static void qemuMonitorJSONHandleResume(qemuMonitorPtr mon, virJSONValuePtr data ATTRIBUTE_UNUSED)
+{
+    qemuMonitorEmitResume(mon);
 }
 
 static void qemuMonitorJSONHandleRTCChange(qemuMonitorPtr mon, virJSONValuePtr data)
@@ -1578,10 +1585,10 @@ int qemuMonitorJSONGetBlockInfo(qemuMonitorPtr mon,
             goto cleanup;
         }
 
-        /* Don't check for success here, because 'tray-open' is presented iff
+        /* Don't check for success here, because 'tray_open' is presented iff
          * medium is ejected.
          */
-        ignore_value(virJSONValueObjectGetBoolean(dev, "tray-open",
+        ignore_value(virJSONValueObjectGetBoolean(dev, "tray_open",
                                                   &info->tray_open));
 
         /* Missing io-status indicates no error */
@@ -2624,6 +2631,85 @@ int qemuMonitorJSONCloseFileHandle(qemuMonitorPtr mon,
     virJSONValuePtr cmd = qemuMonitorJSONMakeCommand("closefd",
                                                      "s:fdname", fdname,
                                                      NULL);
+    virJSONValuePtr reply = NULL;
+    if (!cmd)
+        return -1;
+
+    ret = qemuMonitorJSONCommand(mon, cmd, &reply);
+
+    if (ret == 0)
+        ret = qemuMonitorJSONCheckError(cmd, reply);
+
+    virJSONValueFree(cmd);
+    virJSONValueFree(reply);
+    return ret;
+}
+
+
+int
+qemuMonitorJSONAddFd(qemuMonitorPtr mon, int fdset, int fd, const char *name)
+{
+    int ret;
+    virJSONValuePtr cmd = qemuMonitorJSONMakeCommand("add-fd",
+                                                     "i:fdset-id", fdset,
+                                                     name ? "s:opaque" : NULL,
+                                                     name, NULL);
+    virJSONValuePtr reply = NULL;
+    if (!cmd)
+        return -1;
+
+    ret = qemuMonitorJSONCommandWithFd(mon, cmd, fd, &reply);
+
+    if (ret == 0) {
+        /* qemu 1.2 lacks the functionality we need; but we have to
+         * probe to find that out.  Don't log errors in that case.  */
+        if (STREQ_NULLABLE(name, "/dev/null") &&
+            qemuMonitorJSONHasError(reply, "GenericError")) {
+            ret = -2;
+            goto cleanup;
+        }
+        ret = qemuMonitorJSONCheckError(cmd, reply);
+    }
+    if (ret == 0) {
+        virJSONValuePtr data = virJSONValueObjectGet(reply, "return");
+
+        if (!data || data->type != VIR_JSON_TYPE_OBJECT) {
+            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                           _("missing return information"));
+            goto error;
+        }
+        data = virJSONValueObjectGet(data, "fd");
+        if (!data || data->type != VIR_JSON_TYPE_NUMBER ||
+            virJSONValueGetNumberInt(data, &ret) < 0) {
+            virReportError(VIR_ERR_INTERNAL_ERROR, "%s",
+                           _("incomplete return information"));
+            goto error;
+        }
+    }
+
+cleanup:
+    virJSONValueFree(cmd);
+    virJSONValueFree(reply);
+    return ret;
+
+error:
+    /* Best effort cleanup - kill the entire fdset (even if it has
+     * earlier successful fd registrations), since we don't know which
+     * fd qemu got, and don't want to leave the fd leaked in qemu.  */
+    qemuMonitorJSONRemoveFd(mon, fdset, -1);
+    ret = -1;
+    goto cleanup;
+}
+
+
+int
+qemuMonitorJSONRemoveFd(qemuMonitorPtr mon, int fdset, int fd)
+{
+    int ret;
+    virJSONValuePtr cmd = qemuMonitorJSONMakeCommand("remove-fd",
+                                                     "i:fdset-id", fdset,
+                                                     fd < 0 ? NULL : "i:fd",
+                                                     fd, NULL);
     virJSONValuePtr reply = NULL;
     if (!cmd)
         return -1;

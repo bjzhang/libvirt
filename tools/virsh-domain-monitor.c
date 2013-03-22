@@ -34,10 +34,10 @@
 #include "internal.h"
 #include "conf/domain_conf.h"
 #include "intprops.h"
-#include "memory.h"
+#include "viralloc.h"
 #include "virmacaddr.h"
 #include "virsh-domain.h"
-#include "xml.h"
+#include "virxml.h"
 
 static const char *
 vshDomainIOErrorToString(int error)
@@ -290,14 +290,22 @@ vshDomainStateReasonToString(int state, int reason)
  * "dommemstat" command
  */
 static const vshCmdInfo info_dommemstat[] = {
-    {"help", N_("get memory statistics for a domain")},
-    {"desc", N_("Get memory statistics for a running domain.")},
-    {NULL,NULL}
+    {.name = "help",
+     .data = N_("get memory statistics for a domain")
+    },
+    {.name = "desc",
+     .data = N_("Get memory statistics for a running domain.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_dommemstat[] = {
-    {"domain", VSH_OT_DATA, VSH_OFLAG_REQ, N_("domain name, id or uuid")},
-    {NULL, 0, 0, NULL}
+    {.name = "domain",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("domain name, id or uuid")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -345,15 +353,27 @@ cmdDomMemStat(vshControl *ctl, const vshCmd *cmd)
  * "domblkinfo" command
  */
 static const vshCmdInfo info_domblkinfo[] = {
-    {"help", N_("domain block device size information")},
-    {"desc", N_("Get block device size info for a domain.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("domain block device size information")
+    },
+    {.name = "desc",
+     .data = N_("Get block device size info for a domain.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_domblkinfo[] = {
-    {"domain", VSH_OT_DATA, VSH_OFLAG_REQ, N_("domain name, id or uuid")},
-    {"device", VSH_OT_DATA, VSH_OFLAG_REQ, N_("block device")},
-    {NULL, 0, 0, NULL}
+    {.name = "domain",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("domain name, id or uuid")
+    },
+    {.name = "device",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("block device")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -361,26 +381,25 @@ cmdDomblkinfo(vshControl *ctl, const vshCmd *cmd)
 {
     virDomainBlockInfo info;
     virDomainPtr dom;
-    bool ret = true;
+    bool ret = false;
     const char *device = NULL;
 
     if (!(dom = vshCommandOptDomain(ctl, cmd, NULL)))
         return false;
 
-    if (vshCommandOptString(cmd, "device", &device) <= 0) {
-        virDomainFree(dom);
-        return false;
-    }
+    if (vshCommandOptStringReq(ctl, cmd, "device", &device) < 0)
+        goto cleanup;
 
-    if (virDomainGetBlockInfo(dom, device, &info, 0) < 0) {
-        virDomainFree(dom);
-        return false;
-    }
+    if (virDomainGetBlockInfo(dom, device, &info, 0) < 0)
+        goto cleanup;
 
     vshPrint(ctl, "%-15s %llu\n", _("Capacity:"), info.capacity);
     vshPrint(ctl, "%-15s %llu\n", _("Allocation:"), info.allocation);
     vshPrint(ctl, "%-15s %llu\n", _("Physical:"), info.physical);
 
+    ret = true;
+
+cleanup:
     virDomainFree(dom);
     return ret;
 }
@@ -389,18 +408,32 @@ cmdDomblkinfo(vshControl *ctl, const vshCmd *cmd)
  * "domblklist" command
  */
 static const vshCmdInfo info_domblklist[] = {
-    {"help", N_("list all domain blocks")},
-    {"desc", N_("Get the summary of block devices for a domain.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("list all domain blocks")
+    },
+    {.name = "desc",
+     .data = N_("Get the summary of block devices for a domain.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_domblklist[] = {
-    {"domain", VSH_OT_DATA, VSH_OFLAG_REQ, N_("domain name, id or uuid")},
-    {"inactive", VSH_OT_BOOL, 0,
-     N_("get inactive rather than running configuration")},
-    {"details", VSH_OT_BOOL, 0,
-     N_("additionally display the type and device value")},
-    {NULL, 0, 0, NULL}
+    {.name = "domain",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("domain name, id or uuid")
+    },
+    {.name = "inactive",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("get inactive rather than running configuration")
+    },
+    {.name = "details",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("additionally display the type and device value")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -501,10 +534,17 @@ static const vshCmdInfo info_domiflist[] = {
 };
 
 static const vshCmdOptDef opts_domiflist[] = {
-    {"domain", VSH_OT_DATA, VSH_OFLAG_REQ, N_("domain name, id or uuid")},
-    {"inactive", VSH_OT_BOOL, 0,
-     N_("get inactive rather than running configuration")},
-    {NULL, 0, 0, NULL}
+    {.name = "domain",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("domain name, id or uuid")
+    },
+    {.name = "inactive",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("get inactive rather than running configuration")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -590,17 +630,37 @@ cleanup:
  * "domif-getlink" command
  */
 static const vshCmdInfo info_domif_getlink[] = {
-    {"help", N_("get link state of a virtual interface")},
-    {"desc", N_("Get link state of a domain's virtual interface.")},
-    {NULL,NULL}
+    {.name = "help",
+     .data = N_("get link state of a virtual interface")
+    },
+    {.name = "desc",
+     .data = N_("Get link state of a domain's virtual interface.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_domif_getlink[] = {
-    {"domain", VSH_OT_DATA, VSH_OFLAG_REQ, N_("domain name, id or uuid")},
-    {"interface", VSH_OT_DATA, VSH_OFLAG_REQ, N_("interface device (MAC Address)")},
-    {"persistent", VSH_OT_ALIAS, 0, "config"},
-    {"config", VSH_OT_BOOL, 0, N_("Get persistent interface state")},
-    {NULL, 0, 0, NULL}
+    {.name = "domain",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("domain name, id or uuid")
+    },
+    {.name = "interface",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("interface device (MAC Address)")
+    },
+    {.name = "persistent",
+     .type = VSH_OT_ALIAS,
+     .flags = 0,
+     .help = "config"
+    },
+    {.name = "config",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("Get persistent interface state")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -625,16 +685,13 @@ cmdDomIfGetLink(vshControl *ctl, const vshCmd *cmd)
     if (!(dom = vshCommandOptDomain(ctl, cmd, NULL)))
         return false;
 
-    if (vshCommandOptString(cmd, "interface", &iface) <= 0) {
-        virDomainFree(dom);
-        return false;
-    }
+    if (vshCommandOptStringReq(ctl, cmd, "interface", &iface) < 0)
+        goto cleanup;
 
     if (vshCommandOptBool(cmd, "config"))
         flags = VIR_DOMAIN_XML_INACTIVE;
 
-    desc = virDomainGetXMLDesc(dom, flags);
-    if (desc == NULL) {
+    if (!(desc = virDomainGetXMLDesc(dom, flags))) {
         vshError(ctl, _("Failed to get domain description xml"));
         goto cleanup;
     }
@@ -707,8 +764,7 @@ cleanup:
     xmlXPathFreeObject(obj);
     xmlXPathFreeContext(ctxt);
     xmlFreeDoc(xml);
-    if (dom)
-        virDomainFree(dom);
+    virDomainFree(dom);
 
     return ret;
 }
@@ -717,14 +773,22 @@ cleanup:
  * "domcontrol" command
  */
 static const vshCmdInfo info_domcontrol[] = {
-    {"help", N_("domain control interface state")},
-    {"desc", N_("Returns state of a control interface to the domain.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("domain control interface state")
+    },
+    {.name = "desc",
+     .data = N_("Returns state of a control interface to the domain.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_domcontrol[] = {
-    {"domain", VSH_OT_DATA, VSH_OFLAG_REQ, N_("domain name, id or uuid")},
-    {NULL, 0, 0, NULL}
+    {.name = "domain",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("domain name, id or uuid")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -761,17 +825,33 @@ cleanup:
  * "domblkstat" command
  */
 static const vshCmdInfo info_domblkstat[] = {
-    {"help", N_("get device block stats for a domain")},
-    {"desc", N_("Get device block stats for a running domain. See man page or "
-                "use --human for explanation of fields")},
-    {NULL,NULL}
+    {.name = "help",
+     .data = N_("get device block stats for a domain")
+    },
+    {.name = "desc",
+     .data = N_("Get device block stats for a running domain. See man page or "
+                "use --human for explanation of fields")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_domblkstat[] = {
-    {"domain", VSH_OT_DATA, VSH_OFLAG_REQ, N_("domain name, id or uuid")},
-    {"device", VSH_OT_DATA, VSH_OFLAG_REQ, N_("block device")},
-    {"human",  VSH_OT_BOOL, 0, N_("print a more human readable output")},
-    {NULL, 0, 0, NULL}
+    {.name = "domain",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("domain name, id or uuid")
+    },
+    {.name = "device",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("block device")
+    },
+    {.name = "human",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("print a more human readable output")
+    },
+    {.name = NULL}
 };
 
 struct _domblkstat_sequence {
@@ -830,7 +910,7 @@ cmdDomblkstat(vshControl *ctl, const vshCmd *cmd)
     if (!(dom = vshCommandOptDomain(ctl, cmd, &name)))
         return false;
 
-    if (vshCommandOptString(cmd, "device", &device) <= 0)
+    if (vshCommandOptStringReq(ctl, cmd, "device", &device) < 0)
         goto cleanup;
 
     rc = virDomainBlockStatsFlags(dom, device, NULL, &nparams, 0);
@@ -880,9 +960,8 @@ cmdDomblkstat(vshControl *ctl, const vshCmd *cmd)
 
         /* at first print all known values in desired order */
         for (i = 0; domblkstat_output[i].field != NULL; i++) {
-            if (!(par = vshFindTypedParamByName(domblkstat_output[i].field,
-                                                params,
-                                                nparams)))
+            if (!(par = virTypedParamsGet(params, nparams,
+                                          domblkstat_output[i].field)))
                 continue;
 
             value = vshGetTypedParamValue(ctl, par);
@@ -931,15 +1010,27 @@ cleanup:
  * "domifstat" command
  */
 static const vshCmdInfo info_domifstat[] = {
-    {"help", N_("get network interface stats for a domain")},
-    {"desc", N_("Get network interface stats for a running domain.")},
-    {NULL,NULL}
+    {.name = "help",
+     .data = N_("get network interface stats for a domain")
+    },
+    {.name = "desc",
+     .data = N_("Get network interface stats for a running domain.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_domifstat[] = {
-    {"domain", VSH_OT_DATA, VSH_OFLAG_REQ, N_("domain name, id or uuid")},
-    {"interface", VSH_OT_DATA, VSH_OFLAG_REQ, N_("interface device")},
-    {NULL, 0, 0, NULL}
+    {.name = "domain",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("domain name, id or uuid")
+    },
+    {.name = "interface",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("interface device")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -948,19 +1039,17 @@ cmdDomIfstat(vshControl *ctl, const vshCmd *cmd)
     virDomainPtr dom;
     const char *name = NULL, *device = NULL;
     struct _virDomainInterfaceStats stats;
+    bool ret = false;
 
     if (!(dom = vshCommandOptDomain(ctl, cmd, &name)))
         return false;
 
-    if (vshCommandOptString(cmd, "interface", &device) <= 0) {
-        virDomainFree(dom);
-        return false;
-    }
+    if (vshCommandOptStringReq(ctl, cmd, "interface", &device) < 0)
+        goto cleanup;
 
     if (virDomainInterfaceStats(dom, device, &stats, sizeof(stats)) == -1) {
         vshError(ctl, _("Failed to get interface stats %s %s"), name, device);
-        virDomainFree(dom);
-        return false;
+        goto cleanup;
     }
 
     if (stats.rx_bytes >= 0)
@@ -987,22 +1076,33 @@ cmdDomIfstat(vshControl *ctl, const vshCmd *cmd)
     if (stats.tx_drop >= 0)
         vshPrint(ctl, "%s tx_drop %lld\n", device, stats.tx_drop);
 
+    ret = true;
+
+cleanup:
     virDomainFree(dom);
-    return true;
+    return ret;
 }
 
 /*
  * "domblkerror" command
  */
 static const vshCmdInfo info_domblkerror[] = {
-    {"help", N_("Show errors on block devices")},
-    {"desc", N_("Show block device errors")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("Show errors on block devices")
+    },
+    {.name = "desc",
+     .data = N_("Show block device errors")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_domblkerror[] = {
-    {"domain", VSH_OT_DATA, VSH_OFLAG_REQ, N_("domain name, id, or uuid")},
-    {NULL, 0, 0, NULL}
+    {.name = "domain",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("domain name, id, or uuid")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -1052,14 +1152,22 @@ cleanup:
  * "dominfo" command
  */
 static const vshCmdInfo info_dominfo[] = {
-    {"help", N_("domain information")},
-    {"desc", N_("Returns basic information about the domain.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("domain information")
+    },
+    {.name = "desc",
+     .data = N_("Returns basic information about the domain.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_dominfo[] = {
-    {"domain", VSH_OT_DATA, VSH_OFLAG_REQ, N_("domain name, id or uuid")},
-    {NULL, 0, 0, NULL}
+    {.name = "domain",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("domain name, id or uuid")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -1186,15 +1294,27 @@ cmdDominfo(vshControl *ctl, const vshCmd *cmd)
  * "domstate" command
  */
 static const vshCmdInfo info_domstate[] = {
-    {"help", N_("domain state")},
-    {"desc", N_("Returns state about a domain.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("domain state")
+    },
+    {.name = "desc",
+     .data = N_("Returns state about a domain.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_domstate[] = {
-    {"domain", VSH_OT_DATA, VSH_OFLAG_REQ, N_("domain name, id or uuid")},
-    {"reason", VSH_OT_BOOL, 0, N_("also print reason for the state")},
-    {NULL, 0, 0, NULL}
+    {.name = "domain",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("domain name, id or uuid")
+    },
+    {.name = "reason",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("also print reason for the state")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -1231,9 +1351,13 @@ cleanup:
  * "list" command
  */
 static const vshCmdInfo info_list[] = {
-    {"help", N_("list domains")},
-    {"desc", N_("Returns list of domains.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("list domains")
+    },
+    {.name = "desc",
+     .data = N_("Returns list of domains.")
+    },
+    {.name = NULL}
 };
 
 /* compare domains, pack NULLed ones at the end*/
@@ -1512,32 +1636,102 @@ cleanup:
 }
 
 static const vshCmdOptDef opts_list[] = {
-    {"inactive", VSH_OT_BOOL, 0, N_("list inactive domains")},
-    {"all", VSH_OT_BOOL, 0, N_("list inactive & active domains")},
-    {"transient", VSH_OT_BOOL, 0, N_("list transient domains")},
-    {"persistent", VSH_OT_BOOL, 0, N_("list persistent domains")},
-    {"with-snapshot", VSH_OT_BOOL, 0,
-     N_("list domains with existing snapshot")},
-    {"without-snapshot", VSH_OT_BOOL, 0,
-     N_("list domains without a snapshot")},
-    {"state-running", VSH_OT_BOOL, 0, N_("list domains in running state")},
-    {"state-paused", VSH_OT_BOOL, 0, N_("list domains in paused state")},
-    {"state-shutoff", VSH_OT_BOOL, 0, N_("list domains in shutoff state")},
-    {"state-other", VSH_OT_BOOL, 0, N_("list domains in other states")},
-    {"autostart", VSH_OT_BOOL, 0, N_("list domains with autostart enabled")},
-    {"no-autostart", VSH_OT_BOOL, 0,
-     N_("list domains with autostart disabled")},
-    {"with-managed-save", VSH_OT_BOOL, 0,
-     N_("list domains with managed save state")},
-    {"without-managed-save", VSH_OT_BOOL, 0,
-     N_("list domains without managed save")},
-    {"uuid", VSH_OT_BOOL, 0, N_("list uuid's only")},
-    {"name", VSH_OT_BOOL, 0, N_("list domain names only")},
-    {"table", VSH_OT_BOOL, 0, N_("list table (default)")},
-    {"managed-save", VSH_OT_BOOL, 0,
-     N_("mark inactive domains with managed save state")},
-    {"title", VSH_OT_BOOL, 0, N_("show short domain description")},
-    {NULL, 0, 0, NULL}
+    {.name = "inactive",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list inactive domains")
+    },
+    {.name = "all",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list inactive & active domains")
+    },
+    {.name = "transient",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list transient domains")
+    },
+    {.name = "persistent",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list persistent domains")
+    },
+    {.name = "with-snapshot",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list domains with existing snapshot")
+    },
+    {.name = "without-snapshot",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list domains without a snapshot")
+    },
+    {.name = "state-running",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list domains in running state")
+    },
+    {.name = "state-paused",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list domains in paused state")
+    },
+    {.name = "state-shutoff",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list domains in shutoff state")
+    },
+    {.name = "state-other",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list domains in other states")
+    },
+    {.name = "autostart",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list domains with autostart enabled")
+    },
+    {.name = "no-autostart",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list domains with autostart disabled")
+    },
+    {.name = "with-managed-save",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list domains with managed save state")
+    },
+    {.name = "without-managed-save",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list domains without managed save")
+    },
+    {.name = "uuid",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list uuid's only")
+    },
+    {.name = "name",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list domain names only")
+    },
+    {.name = "table",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list table (default)")
+    },
+    {.name = "managed-save",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("mark inactive domains with managed save state")
+    },
+    {.name = "title",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("show short domain description")
+    },
+    {.name = NULL}
 };
 
 #define FILTER(NAME, FLAG)              \
@@ -1662,17 +1856,77 @@ cleanup:
 #undef FILTER
 
 const vshCmdDef domMonitoringCmds[] = {
-    {"domblkerror", cmdDomBlkError, opts_domblkerror, info_domblkerror, 0},
-    {"domblkinfo", cmdDomblkinfo, opts_domblkinfo, info_domblkinfo, 0},
-    {"domblklist", cmdDomblklist, opts_domblklist, info_domblklist, 0},
-    {"domblkstat", cmdDomblkstat, opts_domblkstat, info_domblkstat, 0},
-    {"domcontrol", cmdDomControl, opts_domcontrol, info_domcontrol, 0},
-    {"domif-getlink", cmdDomIfGetLink, opts_domif_getlink, info_domif_getlink, 0},
-    {"domiflist", cmdDomiflist, opts_domiflist, info_domiflist, 0},
-    {"domifstat", cmdDomIfstat, opts_domifstat, info_domifstat, 0},
-    {"dominfo", cmdDominfo, opts_dominfo, info_dominfo, 0},
-    {"dommemstat", cmdDomMemStat, opts_dommemstat, info_dommemstat, 0},
-    {"domstate", cmdDomstate, opts_domstate, info_domstate, 0},
-    {"list", cmdList, opts_list, info_list, 0},
-    {NULL, NULL, NULL, NULL, 0}
+    {.name = "domblkerror",
+     .handler = cmdDomBlkError,
+     .opts = opts_domblkerror,
+     .info = info_domblkerror,
+     .flags = 0
+    },
+    {.name = "domblkinfo",
+     .handler = cmdDomblkinfo,
+     .opts = opts_domblkinfo,
+     .info = info_domblkinfo,
+     .flags = 0
+    },
+    {.name = "domblklist",
+     .handler = cmdDomblklist,
+     .opts = opts_domblklist,
+     .info = info_domblklist,
+     .flags = 0
+    },
+    {.name = "domblkstat",
+     .handler = cmdDomblkstat,
+     .opts = opts_domblkstat,
+     .info = info_domblkstat,
+     .flags = 0
+    },
+    {.name = "domcontrol",
+     .handler = cmdDomControl,
+     .opts = opts_domcontrol,
+     .info = info_domcontrol,
+     .flags = 0
+    },
+    {.name = "domif-getlink",
+     .handler = cmdDomIfGetLink,
+     .opts = opts_domif_getlink,
+     .info = info_domif_getlink,
+     .flags = 0
+    },
+    {.name = "domiflist",
+     .handler = cmdDomiflist,
+     .opts = opts_domiflist,
+     .info = info_domiflist,
+     .flags = 0
+    },
+    {.name = "domifstat",
+     .handler = cmdDomIfstat,
+     .opts = opts_domifstat,
+     .info = info_domifstat,
+     .flags = 0
+    },
+    {.name = "dominfo",
+     .handler = cmdDominfo,
+     .opts = opts_dominfo,
+     .info = info_dominfo,
+     .flags = 0
+    },
+    {.name = "dommemstat",
+     .handler = cmdDomMemStat,
+     .opts = opts_dommemstat,
+     .info = info_dommemstat,
+     .flags = 0
+    },
+    {.name = "domstate",
+     .handler = cmdDomstate,
+     .opts = opts_domstate,
+     .info = info_domstate,
+     .flags = 0
+    },
+    {.name = "list",
+     .handler = cmdList,
+     .opts = opts_list,
+     .info = info_list,
+     .flags = 0
+    },
+    {.name = NULL}
 };

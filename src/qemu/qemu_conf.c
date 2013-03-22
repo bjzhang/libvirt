@@ -1,7 +1,7 @@
 /*
  * qemu_conf.c: QEMU configuration management
  *
- * Copyright (C) 2006-2012 Red Hat, Inc.
+ * Copyright (C) 2006-2013 Red Hat, Inc.
  * Copyright (C) 2006 Daniel P. Berrange
  *
  * This library is free software; you can redistribute it and/or
@@ -33,104 +33,276 @@
 #include <fcntl.h>
 #include <sys/wait.h>
 #include <arpa/inet.h>
-#include <sys/utsname.h>
-#include <mntent.h>
 
-#include "virterror_internal.h"
+#include "virerror.h"
 #include "qemu_conf.h"
 #include "qemu_command.h"
 #include "qemu_capabilities.h"
 #include "qemu_bridge_filter.h"
-#include "uuid.h"
-#include "buf.h"
-#include "conf.h"
-#include "util.h"
-#include "memory.h"
+#include "viruuid.h"
+#include "virbuffer.h"
+#include "virconf.h"
+#include "virutil.h"
+#include "viralloc.h"
 #include "datatypes.h"
-#include "xml.h"
+#include "virxml.h"
 #include "nodeinfo.h"
-#include "logging.h"
+#include "virlog.h"
 #include "cpu/cpu.h"
 #include "domain_nwfilter.h"
 #include "virfile.h"
+#include "virstring.h"
+#include "viratomic.h"
 #include "configmake.h"
 
 #define VIR_FROM_THIS VIR_FROM_QEMU
+
+static virClassPtr virQEMUDriverConfigClass;
+static void virQEMUDriverConfigDispose(void *obj);
+
+static int virQEMUConfigOnceInit(void)
+{
+    if (!(virQEMUDriverConfigClass = virClassNew(virClassForObject(),
+                                                 "virQEMUDriverConfig",
+                                                 sizeof(virQEMUDriverConfig),
+                                                 virQEMUDriverConfigDispose)))
+        return -1;
+
+    return 0;
+}
+
+VIR_ONCE_GLOBAL_INIT(virQEMUConfig)
+
 
 struct _qemuDriverCloseDef {
     virConnectPtr conn;
     qemuDriverCloseCallback cb;
 };
 
-void qemuDriverLock(virQEMUDriverPtr driver)
+static void
+qemuDriverLock(virQEMUDriverPtr driver)
 {
     virMutexLock(&driver->lock);
 }
-void qemuDriverUnlock(virQEMUDriverPtr driver)
+static void
+qemuDriverUnlock(virQEMUDriverPtr driver)
 {
     virMutexUnlock(&driver->lock);
 }
 
 
-int qemuLoadDriverConfig(virQEMUDriverPtr driver,
-                         const char *filename) {
-    virConfPtr conf = NULL;
-    virConfValuePtr p;
-    char *user = NULL;
-    char *group = NULL;
-    int ret = -1;
-    int i;
+virQEMUDriverConfigPtr virQEMUDriverConfigNew(bool privileged)
+{
+    virQEMUDriverConfigPtr cfg;
 
-    /* Setup critical defaults */
-    driver->securityDefaultConfined = true;
-    driver->securityRequireConfined = false;
-    driver->dynamicOwnership = 1;
-    driver->clearEmulatorCapabilities = 1;
+    if (virQEMUConfigInitialize() < 0)
+        return NULL;
 
-    if (!(driver->vncListen = strdup("127.0.0.1")))
+    if (!(cfg = virObjectNew(virQEMUDriverConfigClass)))
+        return NULL;
+
+    cfg->privileged = privileged;
+    cfg->uri = privileged ? "qemu:///system" : "qemu:///session";
+
+    if (privileged) {
+        if (virGetUserID(QEMU_USER, &cfg->user) < 0)
+            goto error;
+        if (virGetGroupID(QEMU_GROUP, &cfg->group) < 0)
+            goto error;
+    } else {
+        cfg->user = 0;
+        cfg->group = 0;
+    }
+    cfg->dynamicOwnership = privileged;
+
+    cfg->cgroupControllers =
+        (1 << VIR_CGROUP_CONTROLLER_CPU) |
+        (1 << VIR_CGROUP_CONTROLLER_DEVICES) |
+        (1 << VIR_CGROUP_CONTROLLER_MEMORY) |
+        (1 << VIR_CGROUP_CONTROLLER_BLKIO) |
+        (1 << VIR_CGROUP_CONTROLLER_CPUSET) |
+        (1 << VIR_CGROUP_CONTROLLER_CPUACCT);
+
+
+    if (privileged) {
+        if (virAsprintf(&cfg->logDir,
+                        "%s/log/libvirt/qemu", LOCALSTATEDIR) < 0)
+            goto no_memory;
+
+        if ((cfg->configBaseDir = strdup(SYSCONFDIR "/libvirt")) == NULL)
+            goto no_memory;
+
+        if (virAsprintf(&cfg->stateDir,
+                      "%s/run/libvirt/qemu", LOCALSTATEDIR) < 0)
+            goto no_memory;
+
+        if (virAsprintf(&cfg->libDir,
+                      "%s/lib/libvirt/qemu", LOCALSTATEDIR) < 0)
+            goto no_memory;
+
+        if (virAsprintf(&cfg->cacheDir,
+                      "%s/cache/libvirt/qemu", LOCALSTATEDIR) < 0)
+            goto no_memory;
+        if (virAsprintf(&cfg->saveDir,
+                      "%s/lib/libvirt/qemu/save", LOCALSTATEDIR) < 0)
+            goto no_memory;
+        if (virAsprintf(&cfg->snapshotDir,
+                        "%s/lib/libvirt/qemu/snapshot", LOCALSTATEDIR) < 0)
+            goto no_memory;
+        if (virAsprintf(&cfg->autoDumpPath,
+                        "%s/lib/libvirt/qemu/dump", LOCALSTATEDIR) < 0)
+            goto no_memory;
+    } else {
+        char *rundir;
+        char *cachedir;
+
+        cachedir = virGetUserCacheDirectory();
+        if (!cachedir)
+            goto error;
+
+        if (virAsprintf(&cfg->logDir,
+                        "%s/qemu/log", cachedir) < 0) {
+            VIR_FREE(cachedir);
+            goto no_memory;
+        }
+        if (virAsprintf(&cfg->cacheDir, "%s/qemu/cache", cachedir) < 0) {
+            VIR_FREE(cachedir);
+            goto no_memory;
+        }
+        VIR_FREE(cachedir);
+
+        rundir = virGetUserRuntimeDirectory();
+        if (!rundir)
+            goto error;
+        if (virAsprintf(&cfg->stateDir, "%s/qemu/run", rundir) < 0) {
+            VIR_FREE(rundir);
+            goto no_memory;
+        }
+        VIR_FREE(rundir);
+
+        if (!(cfg->configBaseDir = virGetUserConfigDirectory()))
+            goto error;
+
+        if (virAsprintf(&cfg->libDir, "%s/qemu/lib", cfg->configBaseDir) < 0)
+            goto no_memory;
+        if (virAsprintf(&cfg->saveDir, "%s/qemu/save", cfg->configBaseDir) < 0)
+            goto no_memory;
+        if (virAsprintf(&cfg->snapshotDir, "%s/qemu/snapshot", cfg->configBaseDir) < 0)
+            goto no_memory;
+        if (virAsprintf(&cfg->autoDumpPath, "%s/qemu/dump", cfg->configBaseDir) < 0)
+            goto no_memory;
+    }
+
+    if (virAsprintf(&cfg->configDir, "%s/qemu", cfg->configBaseDir) < 0)
+        goto no_memory;
+    if (virAsprintf(&cfg->autostartDir, "%s/qemu/autostart", cfg->configBaseDir) < 0)
         goto no_memory;
 
-    driver->remotePortMin = QEMU_REMOTE_PORT_MIN;
-    driver->remotePortMax = QEMU_REMOTE_PORT_MAX;
 
-    if (!(driver->vncTLSx509certdir = strdup(SYSCONFDIR "/pki/libvirt-vnc")))
+    if (!(cfg->vncListen = strdup("127.0.0.1")))
         goto no_memory;
 
-    if (!(driver->spiceListen = strdup("127.0.0.1")))
+    if (!(cfg->vncTLSx509certdir
+          = strdup(SYSCONFDIR "/pki/libvirt-vnc")))
         goto no_memory;
 
-    if (!(driver->spiceTLSx509certdir
+    if (!(cfg->spiceListen = strdup("127.0.0.1")))
+        goto no_memory;
+
+    if (!(cfg->spiceTLSx509certdir
           = strdup(SYSCONFDIR "/pki/libvirt-spice")))
         goto no_memory;
+
+    cfg->remotePortMin = QEMU_REMOTE_PORT_MIN;
+    cfg->remotePortMax = QEMU_REMOTE_PORT_MAX;
 
 #if defined HAVE_MNTENT_H && defined HAVE_GETMNTENT_R
     /* For privileged driver, try and find hugepage mount automatically.
      * Non-privileged driver requires admin to create a dir for the
      * user, chown it, and then let user configure it manually */
-    if (driver->privileged &&
-        !(driver->hugetlbfs_mount = virFileFindMountPoint("hugetlbfs"))) {
+    if (privileged &&
+        !(cfg->hugetlbfsMount = virFileFindMountPoint("hugetlbfs"))) {
         if (errno != ENOENT) {
             virReportSystemError(errno, "%s",
                                  _("unable to find hugetlbfs mountpoint"));
-            goto cleanup;
+            goto error;
         }
     }
 #endif
 
-    if (!(driver->lockManager = virLockManagerPluginNew("nop", NULL, 0)))
-        goto cleanup;
+    cfg->clearEmulatorCapabilities = true;
 
-    driver->keepAliveInterval = 5;
-    driver->keepAliveCount = 5;
-    driver->seccompSandbox = -1;
+    cfg->securityDefaultConfined = true;
+    cfg->securityRequireConfined = false;
+
+    cfg->keepAliveInterval = 5;
+    cfg->keepAliveCount = 5;
+    cfg->seccompSandbox = -1;
+
+    return cfg;
+
+no_memory:
+    virReportOOMError();
+error:
+    virObjectUnref(cfg);
+    return NULL;
+}
+
+
+static void virQEMUDriverConfigDispose(void *obj)
+{
+    virQEMUDriverConfigPtr cfg = obj;
+
+
+    virStringFreeList(cfg->cgroupDeviceACL);
+
+    VIR_FREE(cfg->configBaseDir);
+    VIR_FREE(cfg->configDir);
+    VIR_FREE(cfg->autostartDir);
+    VIR_FREE(cfg->logDir);
+    VIR_FREE(cfg->stateDir);
+
+    VIR_FREE(cfg->libDir);
+    VIR_FREE(cfg->cacheDir);
+    VIR_FREE(cfg->saveDir);
+    VIR_FREE(cfg->snapshotDir);
+
+    VIR_FREE(cfg->vncTLSx509certdir);
+    VIR_FREE(cfg->vncListen);
+    VIR_FREE(cfg->vncPassword);
+    VIR_FREE(cfg->vncSASLdir);
+
+    VIR_FREE(cfg->spiceTLSx509certdir);
+    VIR_FREE(cfg->spiceListen);
+    VIR_FREE(cfg->spicePassword);
+
+    VIR_FREE(cfg->hugetlbfsMount);
+    VIR_FREE(cfg->hugepagePath);
+
+    VIR_FREE(cfg->saveImageFormat);
+    VIR_FREE(cfg->dumpImageFormat);
+    VIR_FREE(cfg->autoDumpPath);
+
+    virStringFreeList(cfg->securityDriverNames);
+
+    VIR_FREE(cfg->lockManagerName);
+}
+
+
+int virQEMUDriverConfigLoadFile(virQEMUDriverConfigPtr cfg,
+                                const char *filename)
+{
+    virConfPtr conf = NULL;
+    virConfValuePtr p;
+    int ret = -1;
+    int i;
 
     /* Just check the file is readable before opening it, otherwise
      * libvirt emits an error.
      */
     if (access(filename, R_OK) == -1) {
         VIR_INFO("Could not read qemu config file %s", filename);
-        ret = 0;
-        goto cleanup;
+        return 0;
     }
 
     if (!(conf = virConfReadFile(filename, 0)))
@@ -150,6 +322,12 @@ int qemuLoadDriverConfig(virQEMUDriverPtr driver,
     if (p)                            \
         VAR = p->l;
 
+#define GET_VALUE_BOOL(NAME, VAR)     \
+    p = virConfGetValue(conf, NAME);  \
+    CHECK_TYPE(NAME, VIR_CONF_LONG);  \
+    if (p)                            \
+        VAR = p->l != 0;
+
 #define GET_VALUE_STR(NAME, VAR)           \
     p = virConfGetValue(conf, NAME);       \
     CHECK_TYPE(NAME, VIR_CONF_STRING);     \
@@ -159,15 +337,15 @@ int qemuLoadDriverConfig(virQEMUDriverPtr driver,
             goto no_memory;                \
     }
 
-    GET_VALUE_LONG("vnc_auto_unix_socket", driver->vncAutoUnixSocket);
-    GET_VALUE_LONG("vnc_tls", driver->vncTLS);
-    GET_VALUE_LONG("vnc_tls_x509_verify", driver->vncTLSx509verify);
-    GET_VALUE_STR("vnc_tls_x509_cert_dir", driver->vncTLSx509certdir);
-    GET_VALUE_STR("vnc_listen", driver->vncListen);
-    GET_VALUE_STR("vnc_password", driver->vncPassword);
-    GET_VALUE_LONG("vnc_sasl", driver->vncSASL);
-    GET_VALUE_STR("vnc_sasl_dir", driver->vncSASLdir);
-    GET_VALUE_LONG("vnc_allow_host_audio", driver->vncAllowHostAudio);
+    GET_VALUE_BOOL("vnc_auto_unix_socket", cfg->vncAutoUnixSocket);
+    GET_VALUE_BOOL("vnc_tls", cfg->vncTLS);
+    GET_VALUE_BOOL("vnc_tls_x509_verify", cfg->vncTLSx509verify);
+    GET_VALUE_STR("vnc_tls_x509_cert_dir", cfg->vncTLSx509certdir);
+    GET_VALUE_STR("vnc_listen", cfg->vncListen);
+    GET_VALUE_STR("vnc_password", cfg->vncPassword);
+    GET_VALUE_BOOL("vnc_sasl", cfg->vncSASL);
+    GET_VALUE_STR("vnc_sasl_dir", cfg->vncSASLdir);
+    GET_VALUE_BOOL("vnc_allow_host_audio", cfg->vncAllowHostAudio);
 
     p = virConfGetValue(conf, "security_driver");
     if (p && p->type == VIR_CONF_LIST) {
@@ -183,36 +361,36 @@ int qemuLoadDriverConfig(virQEMUDriverPtr driver,
             }
         }
 
-        if (VIR_ALLOC_N(driver->securityDriverNames, len + 1) < 0)
+        if (VIR_ALLOC_N(cfg->securityDriverNames, len + 1) < 0)
             goto no_memory;
 
         for (i = 0, pp = p->list; pp; i++, pp = pp->next) {
-            if (!(driver->securityDriverNames[i] = strdup(pp->str)))
+            if (!(cfg->securityDriverNames[i] = strdup(pp->str)))
                 goto no_memory;
         }
-        driver->securityDriverNames[len] = NULL;
+        cfg->securityDriverNames[len] = NULL;
     } else {
         CHECK_TYPE("security_driver", VIR_CONF_STRING);
         if (p && p->str) {
-            if (VIR_ALLOC_N(driver->securityDriverNames, 2) < 0 ||
-                !(driver->securityDriverNames[0] = strdup(p->str)))
+            if (VIR_ALLOC_N(cfg->securityDriverNames, 2) < 0 ||
+                !(cfg->securityDriverNames[0] = strdup(p->str)))
                 goto no_memory;
 
-            driver->securityDriverNames[1] = NULL;
+            cfg->securityDriverNames[1] = NULL;
         }
     }
 
-    GET_VALUE_LONG("security_default_confined", driver->securityDefaultConfined);
-    GET_VALUE_LONG("security_require_confined", driver->securityRequireConfined);
+    GET_VALUE_BOOL("security_default_confined", cfg->securityDefaultConfined);
+    GET_VALUE_BOOL("security_require_confined", cfg->securityRequireConfined);
 
-    GET_VALUE_LONG("spice_tls", driver->spiceTLS);
-    GET_VALUE_STR("spice_tls_x509_cert_dir", driver->spiceTLSx509certdir);
-    GET_VALUE_STR("spice_listen", driver->spiceListen);
-    GET_VALUE_STR("spice_password", driver->spicePassword);
+    GET_VALUE_BOOL("spice_tls", cfg->spiceTLS);
+    GET_VALUE_STR("spice_tls_x509_cert_dir", cfg->spiceTLSx509certdir);
+    GET_VALUE_STR("spice_listen", cfg->spiceListen);
+    GET_VALUE_STR("spice_password", cfg->spicePassword);
 
 
-    GET_VALUE_LONG("remote_display_port_min", driver->remotePortMin);
-    if (driver->remotePortMin < QEMU_REMOTE_PORT_MIN) {
+    GET_VALUE_LONG("remote_display_port_min", cfg->remotePortMin);
+    if (cfg->remotePortMin < QEMU_REMOTE_PORT_MIN) {
         /* if the port is too low, we can't get the display name
          * to tell to vnc (usually subtract 5900, e.g. localhost:1
          * for port 5901) */
@@ -223,21 +401,17 @@ int qemuLoadDriverConfig(virQEMUDriverPtr driver,
         goto cleanup;
     }
 
-    GET_VALUE_LONG("remote_display_port_max", driver->remotePortMax);
-    if (driver->remotePortMax > QEMU_REMOTE_PORT_MAX ||
-        driver->remotePortMax < driver->remotePortMin) {
+    GET_VALUE_LONG("remote_display_port_max", cfg->remotePortMax);
+    if (cfg->remotePortMax > QEMU_REMOTE_PORT_MAX ||
+        cfg->remotePortMax < cfg->remotePortMin) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                         _("%s: remote_display_port_max: port must be between "
                           "the minimal port and %d"),
                        filename, QEMU_REMOTE_PORT_MAX);
         goto cleanup;
     }
-    /* increasing the value by 1 makes all the loops going through
-    the bitmap (i = remotePortMin; i < remotePortMax; i++), work as
-    expected. */
-    driver->remotePortMax++;
 
-    if (driver->remotePortMin > driver->remotePortMax) {
+    if (cfg->remotePortMin > cfg->remotePortMax) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                         _("%s: remote_display_port_min: min port must not be "
                           "greater than max port"), filename);
@@ -246,21 +420,17 @@ int qemuLoadDriverConfig(virQEMUDriverPtr driver,
 
     p = virConfGetValue(conf, "user");
     CHECK_TYPE("user", VIR_CONF_STRING);
-    if (!(user = strdup(p && p->str ? p->str : QEMU_USER)))
-        goto no_memory;
-
-    if (virGetUserID(user, &driver->user) < 0)
+    if (p && p->str &&
+        virGetUserID(p->str, &cfg->user) < 0)
         goto cleanup;
 
     p = virConfGetValue(conf, "group");
     CHECK_TYPE("group", VIR_CONF_STRING);
-    if (!(group = strdup(p && p->str ? p->str : QEMU_GROUP)))
-        goto no_memory;
-
-    if (virGetGroupID(group, &driver->group) < 0)
+    if (p && p->str &&
+        virGetGroupID(p->str, &cfg->group) < 0)
         goto cleanup;
 
-    GET_VALUE_LONG("dynamic_ownership", driver->dynamicOwnership);
+    GET_VALUE_BOOL("dynamic_ownership", cfg->dynamicOwnership);
 
     p = virConfGetValue(conf, "cgroup_controllers");
     CHECK_TYPE("cgroup_controllers", VIR_CONF_LIST);
@@ -280,19 +450,11 @@ int qemuLoadDriverConfig(virQEMUDriverPtr driver,
                                _("Unknown cgroup controller '%s'"), pp->str);
                 goto cleanup;
             }
-            driver->cgroupControllers |= (1 << ctl);
+            cfg->cgroupControllers |= (1 << ctl);
         }
-    } else {
-        driver->cgroupControllers =
-            (1 << VIR_CGROUP_CONTROLLER_CPU) |
-            (1 << VIR_CGROUP_CONTROLLER_DEVICES) |
-            (1 << VIR_CGROUP_CONTROLLER_MEMORY) |
-            (1 << VIR_CGROUP_CONTROLLER_BLKIO) |
-            (1 << VIR_CGROUP_CONTROLLER_CPUSET) |
-            (1 << VIR_CGROUP_CONTROLLER_CPUACCT);
     }
     for (i = 0 ; i < VIR_CGROUP_CONTROLLER_LAST ; i++) {
-        if (driver->cgroupControllers & (1 << i)) {
+        if (cfg->cgroupControllers & (1 << i)) {
             VIR_INFO("Configured cgroup controller '%s'",
                      virCgroupControllerTypeToString(i));
         }
@@ -305,7 +467,7 @@ int qemuLoadDriverConfig(virQEMUDriverPtr driver,
         virConfValuePtr pp;
         for (pp = p->list; pp; pp = pp->next)
             len++;
-        if (VIR_ALLOC_N(driver->cgroupDeviceACL, 1+len) < 0)
+        if (VIR_ALLOC_N(cfg->cgroupDeviceACL, 1+len) < 0)
             goto no_memory;
 
         for (i = 0, pp = p->list; pp; ++i, pp = pp->next) {
@@ -315,71 +477,41 @@ int qemuLoadDriverConfig(virQEMUDriverPtr driver,
                                  "list of strings"));
                 goto cleanup;
             }
-            if (!(driver->cgroupDeviceACL[i] = strdup(pp->str)))
+            if (!(cfg->cgroupDeviceACL[i] = strdup(pp->str)))
                 goto no_memory;
         }
-        driver->cgroupDeviceACL[i] = NULL;
+        cfg->cgroupDeviceACL[i] = NULL;
     }
 
-    GET_VALUE_STR("save_image_format", driver->saveImageFormat);
-    GET_VALUE_STR("dump_image_format", driver->dumpImageFormat);
-    GET_VALUE_STR("auto_dump_path", driver->autoDumpPath);
-    GET_VALUE_LONG("auto_dump_bypass_cache", driver->autoDumpBypassCache);
-    GET_VALUE_LONG("auto_start_bypass_cache", driver->autoStartBypassCache);
+    GET_VALUE_STR("save_image_format", cfg->saveImageFormat);
+    GET_VALUE_STR("dump_image_format", cfg->dumpImageFormat);
+    GET_VALUE_STR("auto_dump_path", cfg->autoDumpPath);
+    GET_VALUE_BOOL("auto_dump_bypass_cache", cfg->autoDumpBypassCache);
+    GET_VALUE_BOOL("auto_start_bypass_cache", cfg->autoStartBypassCache);
 
-    GET_VALUE_STR("hugetlbfs_mount", driver->hugetlbfs_mount);
+    GET_VALUE_STR("hugetlbfs_mount", cfg->hugetlbfsMount);
 
-    p = virConfGetValue(conf, "mac_filter");
-    CHECK_TYPE("mac_filter", VIR_CONF_LONG);
-    if (p && p->l) {
-        driver->macFilter = p->l;
-        if (!(driver->ebtables = ebtablesContextNew("qemu"))) {
-            driver->macFilter = 0;
-            virReportSystemError(errno,
-                                 _("failed to enable mac filter in '%s'"),
-                                 __FILE__);
-            goto cleanup;
-        }
+    GET_VALUE_BOOL("mac_filter", cfg->macFilter);
 
-        if ((errno = networkDisableAllFrames(driver))) {
-            virReportSystemError(errno,
-                         _("failed to add rule to drop all frames in '%s'"),
-                                 __FILE__);
-            goto cleanup;
-        }
-    }
+    GET_VALUE_BOOL("relaxed_acs_check", cfg->relaxedACS);
+    GET_VALUE_BOOL("clear_emulator_capabilities", cfg->clearEmulatorCapabilities);
+    GET_VALUE_BOOL("allow_disk_format_probing", cfg->allowDiskFormatProbing);
+    GET_VALUE_BOOL("set_process_name", cfg->setProcessName);
+    GET_VALUE_LONG("max_processes", cfg->maxProcesses);
+    GET_VALUE_LONG("max_files", cfg->maxFiles);
 
-    GET_VALUE_LONG("relaxed_acs_check", driver->relaxedACS);
-    GET_VALUE_LONG("clear_emulator_capabilities", driver->clearEmulatorCapabilities);
-    GET_VALUE_LONG("allow_disk_format_probing", driver->allowDiskFormatProbing);
-    GET_VALUE_LONG("set_process_name", driver->setProcessName);
-    GET_VALUE_LONG("max_processes", driver->maxProcesses);
-    GET_VALUE_LONG("max_files", driver->maxFiles);
+    GET_VALUE_STR("lock_manager", cfg->lockManagerName);
 
-    p = virConfGetValue(conf, "lock_manager");
-    CHECK_TYPE("lock_manager", VIR_CONF_STRING);
-    if (p && p->str) {
-        char *lockConf;
-        virLockManagerPluginUnref(driver->lockManager);
-        if (virAsprintf(&lockConf, "%s/libvirt/qemu-%s.conf", SYSCONFDIR, p->str) < 0)
-            goto no_memory;
+    GET_VALUE_LONG("max_queued", cfg->maxQueuedJobs);
 
-        if (!(driver->lockManager =
-              virLockManagerPluginNew(p->str, lockConf, 0)))
-            VIR_ERROR(_("Failed to load lock manager %s"), p->str);
-        VIR_FREE(lockConf);
-    }
+    GET_VALUE_LONG("keepalive_interval", cfg->keepAliveInterval);
+    GET_VALUE_LONG("keepalive_count", cfg->keepAliveCount);
 
-    GET_VALUE_LONG("max_queued", driver->max_queued);
-    GET_VALUE_LONG("keepalive_interval", driver->keepAliveInterval);
-    GET_VALUE_LONG("keepalive_count", driver->keepAliveCount);
-    GET_VALUE_LONG("seccomp_sandbox", driver->seccompSandbox);
+    GET_VALUE_LONG("seccomp_sandbox", cfg->seccompSandbox);
 
     ret = 0;
 
 cleanup:
-    VIR_FREE(user);
-    VIR_FREE(group);
     virConfFree(conf);
     return ret;
 
@@ -387,8 +519,124 @@ no_memory:
     virReportOOMError();
     goto cleanup;
 }
+#undef GET_VALUE_BOOL
 #undef GET_VALUE_LONG
 #undef GET_VALUE_STRING
+
+virQEMUDriverConfigPtr virQEMUDriverGetConfig(virQEMUDriverPtr driver)
+{
+    virQEMUDriverConfigPtr conf;
+    qemuDriverLock(driver);
+    conf = virObjectRef(driver->config);
+    qemuDriverUnlock(driver);
+    return conf;
+}
+
+
+virCapsPtr virQEMUDriverCreateCapabilities(virQEMUDriverPtr driver)
+{
+    size_t i;
+    virCapsPtr caps;
+    virSecurityManagerPtr *sec_managers = NULL;
+    /* Security driver data */
+    const char *doi, *model;
+    virQEMUDriverConfigPtr cfg = virQEMUDriverGetConfig(driver);
+
+    /* Basic host arch / guest machine capabilities */
+    if (!(caps = virQEMUCapsInit(driver->qemuCapsCache))) {
+        virReportOOMError();
+        virObjectUnref(cfg);
+        return NULL;
+    }
+
+    if (cfg->allowDiskFormatProbing) {
+        caps->defaultDiskDriverName = NULL;
+        caps->defaultDiskDriverType = VIR_STORAGE_FILE_AUTO;
+    } else {
+        caps->defaultDiskDriverName = "qemu";
+        caps->defaultDiskDriverType = VIR_STORAGE_FILE_RAW;
+    }
+
+    qemuDomainSetPrivateDataHooks(caps);
+    qemuDomainSetNamespaceHooks(caps);
+
+    if (virGetHostUUID(caps->host.host_uuid)) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       "%s", _("cannot get the host uuid"));
+        goto err_exit;
+    }
+
+    /* access sec drivers and create a sec model for each one */
+    sec_managers = virSecurityManagerGetNested(driver->securityManager);
+    if (sec_managers == NULL) {
+        goto err_exit;
+    }
+
+    /* calculate length */
+    for (i = 0; sec_managers[i]; i++)
+        ;
+    caps->host.nsecModels = i;
+
+    if (VIR_ALLOC_N(caps->host.secModels, caps->host.nsecModels) < 0)
+        goto no_memory;
+
+    for (i = 0; sec_managers[i]; i++) {
+        doi = virSecurityManagerGetDOI(sec_managers[i]);
+        model = virSecurityManagerGetModel(sec_managers[i]);
+        if (!(caps->host.secModels[i].model = strdup(model)))
+            goto no_memory;
+        if (!(caps->host.secModels[i].doi = strdup(doi)))
+            goto no_memory;
+        VIR_DEBUG("Initialized caps for security driver \"%s\" with "
+                  "DOI \"%s\"", model, doi);
+    }
+    VIR_FREE(sec_managers);
+
+    virObjectUnref(cfg);
+    return caps;
+
+no_memory:
+    virReportOOMError();
+err_exit:
+    VIR_FREE(sec_managers);
+    virObjectUnref(caps);
+    virObjectUnref(cfg);
+    return NULL;
+}
+
+
+/**
+ * virQEMUDriverGetCapabilities:
+ *
+ * Get a reference to the virCapsPtr instance for the
+ * driver. If @refresh is true, the capabilities will be
+ * rebuilt first
+ *
+ * The caller must release the reference with virObjetUnref
+ *
+ * Returns: a reference to a virCapsPtr instance or NULL
+ */
+virCapsPtr virQEMUDriverGetCapabilities(virQEMUDriverPtr driver,
+                                        bool refresh)
+{
+    virCapsPtr ret = NULL;
+    if (refresh) {
+        virCapsPtr caps = NULL;
+        if ((caps = virQEMUDriverCreateCapabilities(driver)) == NULL)
+            return NULL;
+
+        qemuDriverLock(driver);
+        virObjectUnref(driver->caps);
+        driver->caps = caps;
+    } else {
+        qemuDriverLock(driver);
+    }
+
+    ret = virObjectRef(driver->caps);
+    qemuDriverUnlock(driver);
+    return ret;
+}
+
 
 static void
 qemuDriverCloseCallbackFree(void *payload,
@@ -421,7 +669,9 @@ qemuDriverCloseCallbackSet(virQEMUDriverPtr driver,
 {
     char uuidstr[VIR_UUID_STRING_BUFLEN];
     qemuDriverCloseDefPtr closeDef;
+    int ret = -1;
 
+    qemuDriverLock(driver);
     virUUIDFormat(vm->def->uuid, uuidstr);
     VIR_DEBUG("vm=%s, uuid=%s, conn=%p, cb=%p",
               vm->def->name, uuidstr, conn, cb);
@@ -433,30 +683,34 @@ qemuDriverCloseCallbackSet(virQEMUDriverPtr driver,
                            _("Close callback for domain %s already registered"
                              " with another connection %p"),
                            vm->def->name, closeDef->conn);
-            return -1;
+            goto cleanup;
         }
         if (closeDef->cb && closeDef->cb != cb) {
             virReportError(VIR_ERR_INTERNAL_ERROR,
                            _("Another close callback is already defined for"
                              " domain %s"), vm->def->name);
-            return -1;
+            goto cleanup;
         }
 
         closeDef->cb = cb;
     } else {
         if (VIR_ALLOC(closeDef) < 0) {
             virReportOOMError();
-            return -1;
+            goto cleanup;
         }
 
         closeDef->conn = conn;
         closeDef->cb = cb;
         if (virHashAddEntry(driver->closeCallbacks, uuidstr, closeDef) < 0) {
             VIR_FREE(closeDef);
-            return -1;
+            goto cleanup;
         }
     }
-    return 0;
+
+    ret = 0;
+cleanup:
+    qemuDriverUnlock(driver);
+    return ret;
 }
 
 int
@@ -466,23 +720,28 @@ qemuDriverCloseCallbackUnset(virQEMUDriverPtr driver,
 {
     char uuidstr[VIR_UUID_STRING_BUFLEN];
     qemuDriverCloseDefPtr closeDef;
+    int ret = -1;
 
+    qemuDriverLock(driver);
     virUUIDFormat(vm->def->uuid, uuidstr);
     VIR_DEBUG("vm=%s, uuid=%s, cb=%p",
               vm->def->name, uuidstr, cb);
 
     closeDef = virHashLookup(driver->closeCallbacks, uuidstr);
     if (!closeDef)
-        return -1;
+        goto cleanup;
 
     if (closeDef->cb && closeDef->cb != cb) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Trying to remove mismatching close callback for"
                          " domain %s"), vm->def->name);
-        return -1;
+        goto cleanup;
     }
 
-    return virHashRemoveEntry(driver->closeCallbacks, uuidstr);
+    ret = virHashRemoveEntry(driver->closeCallbacks, uuidstr);
+cleanup:
+    qemuDriverUnlock(driver);
+    return ret;
 }
 
 qemuDriverCloseCallback
@@ -494,6 +753,7 @@ qemuDriverCloseCallbackGet(virQEMUDriverPtr driver,
     qemuDriverCloseDefPtr closeDef;
     qemuDriverCloseCallback cb = NULL;
 
+    qemuDriverLock(driver);
     virUUIDFormat(vm->def->uuid, uuidstr);
     VIR_DEBUG("vm=%s, uuid=%s, conn=%p",
               vm->def->name, uuidstr, conn);
@@ -503,6 +763,7 @@ qemuDriverCloseCallbackGet(virQEMUDriverPtr driver,
         cb = closeDef->cb;
 
     VIR_DEBUG("cb=%p", cb);
+    qemuDriverUnlock(driver);
     return cb;
 }
 
@@ -518,29 +779,34 @@ qemuDriverCloseCallbackRun(void *payload,
 {
     struct qemuDriverCloseCallbackData *data = opaque;
     qemuDriverCloseDefPtr closeDef = payload;
-    const char *uuidstr = name;
     unsigned char uuid[VIR_UUID_BUFLEN];
+    char uuidstr[VIR_UUID_STRING_BUFLEN];
     virDomainObjPtr dom;
 
     VIR_DEBUG("conn=%p, thisconn=%p, uuid=%s, cb=%p",
-              closeDef->conn, data->conn, uuidstr, closeDef->cb);
+              closeDef->conn, data->conn, (const char *)name, closeDef->cb);
 
     if (data->conn != closeDef->conn || !closeDef->cb)
         return;
 
-    if (virUUIDParse(uuidstr, uuid) < 0) {
-        VIR_WARN("Failed to parse %s", uuidstr);
+    if (virUUIDParse(name, uuid) < 0) {
+        VIR_WARN("Failed to parse %s", (const char *)name);
         return;
     }
+    /* We need to reformat uuidstr, because closeDef->cb
+     * might cause the current hash entry to be removed,
+     * which means 'name' will have been free()d
+     */
+    virUUIDFormat(uuid, uuidstr);
 
-    if (!(dom = virDomainFindByUUID(&data->driver->domains, uuid))) {
+    if (!(dom = virDomainObjListFindByUUID(data->driver->domains, uuid))) {
         VIR_DEBUG("No domain object with UUID %s", uuidstr);
         return;
     }
 
     dom = closeDef->cb(data->driver, dom, data->conn);
     if (dom)
-        virDomainObjUnlock(dom);
+        virObjectUnlock(dom);
 
     virHashRemoveEntry(data->driver->closeCallbacks, uuidstr);
 }
@@ -553,6 +819,99 @@ qemuDriverCloseCallbackRunAll(virQEMUDriverPtr driver,
         driver, conn
     };
     VIR_DEBUG("conn=%p", conn);
-
+    qemuDriverLock(driver);
     virHashForEach(driver->closeCallbacks, qemuDriverCloseCallbackRun, &data);
+    qemuDriverUnlock(driver);
+}
+
+/* Construct the hash key for sharedDisks as "major:minor" */
+char *
+qemuGetSharedDiskKey(const char *disk_path)
+{
+    int maj, min;
+    char *key = NULL;
+    int rc;
+
+    if ((rc = virGetDeviceID(disk_path, &maj, &min)) < 0) {
+        virReportSystemError(-rc,
+                             _("Unable to get minor number of device '%s'"),
+                             disk_path);
+        return NULL;
+    }
+
+    if (virAsprintf(&key, "%d:%d", maj, min) < 0) {
+        virReportOOMError();
+        return NULL;
+    }
+
+    return key;
+}
+
+/* Increase ref count if the entry already exists, otherwise
+ * add a new entry.
+ */
+int
+qemuAddSharedDisk(virQEMUDriverPtr driver,
+                  const char *disk_path)
+{
+    size_t *ref = NULL;
+    char *key = NULL;
+    int ret = -1;
+
+    qemuDriverLock(driver);
+    if (!(key = qemuGetSharedDiskKey(disk_path)))
+        goto cleanup;
+
+    if ((ref = virHashLookup(driver->sharedDisks, key))) {
+        if (virHashUpdateEntry(driver->sharedDisks, key, ++ref) < 0)
+             goto cleanup;
+    } else {
+        if (virHashAddEntry(driver->sharedDisks, key, (void *)0x1))
+            goto cleanup;
+    }
+
+    ret = 0;
+cleanup:
+    qemuDriverUnlock(driver);
+    VIR_FREE(key);
+    return ret;
+}
+
+/* Decrease the ref count if the entry already exists, otherwise
+ * remove the entry.
+ */
+int
+qemuRemoveSharedDisk(virQEMUDriverPtr driver,
+                     const char *disk_path)
+{
+    size_t *ref = NULL;
+    char *key = NULL;
+    int ret = -1;
+
+    qemuDriverLock(driver);
+    if (!(key = qemuGetSharedDiskKey(disk_path)))
+        goto cleanup;
+
+    if (!(ref = virHashLookup(driver->sharedDisks, key)))
+        goto cleanup;
+
+    if (ref != (void *)0x1) {
+        if (virHashUpdateEntry(driver->sharedDisks, key, --ref) < 0)
+            goto cleanup;
+    } else {
+        if (virHashRemoveEntry(driver->sharedDisks, key) < 0)
+            goto cleanup;
+    }
+
+    ret = 0;
+cleanup:
+    qemuDriverUnlock(driver);
+    VIR_FREE(key);
+    return ret;
+}
+
+
+int qemuDriverAllocateID(virQEMUDriverPtr driver)
+{
+    return virAtomicIntInc(&driver->nextvmid);
 }

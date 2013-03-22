@@ -32,10 +32,10 @@
 #include <libxml/xmlsave.h>
 
 #include "internal.h"
-#include "buf.h"
-#include "memory.h"
-#include "util.h"
-#include "xml.h"
+#include "virbuffer.h"
+#include "viralloc.h"
+#include "virutil.h"
+#include "virxml.h"
 
 virInterfacePtr
 vshCommandOptInterfaceBy(vshControl *ctl, const vshCmd *cmd,
@@ -51,7 +51,7 @@ vshCommandOptInterfaceBy(vshControl *ctl, const vshCmd *cmd,
     if (!vshCmdHasOption(ctl, cmd, optname))
         return NULL;
 
-    if (vshCommandOptString(cmd, optname, &n) <= 0)
+    if (vshCommandOptStringReq(ctl, cmd, optname, &n) < 0)
         return NULL;
 
     vshDebug(ctl, VSH_ERR_INFO, "%s: found option <%s>: %s\n",
@@ -83,14 +83,22 @@ vshCommandOptInterfaceBy(vshControl *ctl, const vshCmd *cmd,
  * "iface-edit" command
  */
 static const vshCmdInfo info_interface_edit[] = {
-    {"help", N_("edit XML configuration for a physical host interface")},
-    {"desc", N_("Edit the XML configuration for a physical host interface.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("edit XML configuration for a physical host interface")
+    },
+    {.name = "desc",
+     .data = N_("Edit the XML configuration for a physical host interface.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_edit[] = {
-    {"interface", VSH_OT_DATA, VSH_OFLAG_REQ, N_("interface name or MAC address")},
-    {NULL, 0, 0, NULL}
+    {.name = "interface",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("interface name or MAC address")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -305,15 +313,27 @@ cleanup:
  * "iface-list" command
  */
 static const vshCmdInfo info_interface_list[] = {
-    {"help", N_("list physical host interfaces")},
-    {"desc", N_("Returns list of physical host interfaces.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("list physical host interfaces")
+    },
+    {.name = "desc",
+     .data = N_("Returns list of physical host interfaces.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_list[] = {
-    {"inactive", VSH_OT_BOOL, 0, N_("list inactive interfaces")},
-    {"all", VSH_OT_BOOL, 0, N_("list inactive & active interfaces")},
-    {NULL, 0, 0, NULL}
+    {.name = "inactive",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list inactive interfaces")
+    },
+    {.name = "all",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("list inactive & active interfaces")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -355,14 +375,22 @@ cmdInterfaceList(vshControl *ctl, const vshCmd *cmd ATTRIBUTE_UNUSED)
  * "iface-name" command
  */
 static const vshCmdInfo info_interface_name[] = {
-    {"help", N_("convert an interface MAC address to interface name")},
-    {"desc", ""},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("convert an interface MAC address to interface name")
+    },
+    {.name = "desc",
+     .data = ""
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_name[] = {
-    {"interface", VSH_OT_DATA, VSH_OFLAG_REQ, N_("interface mac")},
-    {NULL, 0, 0, NULL}
+    {.name = "interface",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("interface mac")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -383,14 +411,22 @@ cmdInterfaceName(vshControl *ctl, const vshCmd *cmd)
  * "iface-mac" command
  */
 static const vshCmdInfo info_interface_mac[] = {
-    {"help", N_("convert an interface name to interface MAC address")},
-    {"desc", ""},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("convert an interface name to interface MAC address")
+    },
+    {.name = "desc",
+     .data = ""
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_mac[] = {
-    {"interface", VSH_OT_DATA, VSH_OFLAG_REQ, N_("interface name")},
-    {NULL, 0, 0, NULL}
+    {.name = "interface",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("interface name")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -411,15 +447,27 @@ cmdInterfaceMAC(vshControl *ctl, const vshCmd *cmd)
  * "iface-dumpxml" command
  */
 static const vshCmdInfo info_interface_dumpxml[] = {
-    {"help", N_("interface information in XML")},
-    {"desc", N_("Output the physical host interface information as an XML dump to stdout.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("interface information in XML")
+    },
+    {.name = "desc",
+     .data = N_("Output the physical host interface information as an XML dump to stdout.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_dumpxml[] = {
-    {"interface", VSH_OT_DATA, VSH_OFLAG_REQ, N_("interface name or MAC address")},
-    {"inactive", VSH_OT_BOOL, 0, N_("show inactive defined XML")},
-    {NULL, 0, 0, NULL}
+    {.name = "interface",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("interface name or MAC address")
+    },
+    {.name = "inactive",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("show inactive defined XML")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -453,14 +501,22 @@ cmdInterfaceDumpXML(vshControl *ctl, const vshCmd *cmd)
  * "iface-define" command
  */
 static const vshCmdInfo info_interface_define[] = {
-    {"help", N_("define (but don't start) a physical host interface from an XML file")},
-    {"desc", N_("Define a physical host interface.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("define (but don't start) a physical host interface from an XML file")
+    },
+    {.name = "desc",
+     .data = N_("Define a physical host interface.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_define[] = {
-    {"file", VSH_OT_DATA, VSH_OFLAG_REQ, N_("file containing an XML interface description")},
-    {NULL, 0, 0, NULL}
+    {.name = "file",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("file containing an XML interface description")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -471,7 +527,7 @@ cmdInterfaceDefine(vshControl *ctl, const vshCmd *cmd)
     bool ret = true;
     char *buffer;
 
-    if (vshCommandOptString(cmd, "file", &from) <= 0)
+    if (vshCommandOptStringReq(ctl, cmd, "file", &from) < 0)
         return false;
 
     if (virFileReadAll(from, VSH_MAX_XML_FILE, &buffer) < 0)
@@ -495,14 +551,22 @@ cmdInterfaceDefine(vshControl *ctl, const vshCmd *cmd)
  * "iface-undefine" command
  */
 static const vshCmdInfo info_interface_undefine[] = {
-    {"help", N_("undefine a physical host interface (remove it from configuration)")},
-    {"desc", N_("undefine an interface.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("undefine a physical host interface (remove it from configuration)")
+    },
+    {.name = "desc",
+     .data = N_("undefine an interface.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_undefine[] = {
-    {"interface", VSH_OT_DATA, VSH_OFLAG_REQ, N_("interface name or MAC address")},
-    {NULL, 0, 0, NULL}
+    {.name = "interface",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("interface name or MAC address")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -530,14 +594,22 @@ cmdInterfaceUndefine(vshControl *ctl, const vshCmd *cmd)
  * "iface-start" command
  */
 static const vshCmdInfo info_interface_start[] = {
-    {"help", N_("start a physical host interface (enable it / \"if-up\")")},
-    {"desc", N_("start a physical host interface.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("start a physical host interface (enable it / \"if-up\")")
+    },
+    {.name = "desc",
+     .data = N_("start a physical host interface.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_start[] = {
-    {"interface", VSH_OT_DATA, VSH_OFLAG_REQ, N_("interface name or MAC address")},
-    {NULL, 0, 0, NULL}
+    {.name = "interface",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("interface name or MAC address")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -565,14 +637,22 @@ cmdInterfaceStart(vshControl *ctl, const vshCmd *cmd)
  * "iface-destroy" command
  */
 static const vshCmdInfo info_interface_destroy[] = {
-    {"help", N_("destroy a physical host interface (disable it / \"if-down\")")},
-    {"desc", N_("forcefully stop a physical host interface.")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("destroy a physical host interface (disable it / \"if-down\")")
+    },
+    {.name = "desc",
+     .data = N_("forcefully stop a physical host interface.")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_destroy[] = {
-    {"interface", VSH_OT_DATA, VSH_OFLAG_REQ, N_("interface name or MAC address")},
-    {NULL, 0, 0, NULL}
+    {.name = "interface",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("interface name or MAC address")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -600,15 +680,19 @@ cmdInterfaceDestroy(vshControl *ctl, const vshCmd *cmd)
  * "iface-begin" command
  */
 static const vshCmdInfo info_interface_begin[] = {
-    {"help", N_("create a snapshot of current interfaces settings, "
+    {.name = "help",
+     .data = N_("create a snapshot of current interfaces settings, "
                 "which can be later committed (iface-commit) or "
-                "restored (iface-rollback)")},
-    {"desc", N_("Create a restore point for interfaces settings")},
-    {NULL, NULL}
+                "restored (iface-rollback)")
+    },
+    {.name = "desc",
+     .data = N_("Create a restore point for interfaces settings")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_begin[] = {
-    {NULL, 0, 0, NULL}
+    {.name = NULL}
 };
 
 static bool
@@ -627,13 +711,17 @@ cmdInterfaceBegin(vshControl *ctl, const vshCmd *cmd ATTRIBUTE_UNUSED)
  * "iface-commit" command
  */
 static const vshCmdInfo info_interface_commit[] = {
-    {"help", N_("commit changes made since iface-begin and free restore point")},
-    {"desc", N_("commit changes and free restore point")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("commit changes made since iface-begin and free restore point")
+    },
+    {.name = "desc",
+     .data = N_("commit changes and free restore point")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_commit[] = {
-    {NULL, 0, 0, NULL}
+    {.name = NULL}
 };
 
 static bool
@@ -652,13 +740,17 @@ cmdInterfaceCommit(vshControl *ctl, const vshCmd *cmd ATTRIBUTE_UNUSED)
  * "iface-rollback" command
  */
 static const vshCmdInfo info_interface_rollback[] = {
-    {"help", N_("rollback to previous saved configuration created via iface-begin")},
-    {"desc", N_("rollback to previous restore point")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("rollback to previous saved configuration created via iface-begin")
+    },
+    {.name = "desc",
+     .data = N_("rollback to previous restore point")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_rollback[] = {
-    {NULL, 0, 0, NULL}
+    {.name = NULL}
 };
 
 static bool
@@ -677,19 +769,42 @@ cmdInterfaceRollback(vshControl *ctl, const vshCmd *cmd ATTRIBUTE_UNUSED)
  * "iface-bridge" command
  */
 static const vshCmdInfo info_interface_bridge[] = {
-    {"help", N_("create a bridge device and attach an existing network device to it")},
-    {"desc", N_("bridge an existing network device")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("create a bridge device and attach an existing network device to it")
+    },
+    {.name = "desc",
+     .data = N_("bridge an existing network device")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_bridge[] = {
-    {"interface", VSH_OT_DATA, VSH_OFLAG_REQ, N_("existing interface name")},
-    {"bridge", VSH_OT_DATA, VSH_OFLAG_REQ, N_("new bridge device name")},
-    {"no-stp", VSH_OT_BOOL, 0, N_("do not enable STP for this bridge")},
-    {"delay", VSH_OT_INT, 0,
-     N_("number of seconds to squelch traffic on newly connected ports")},
-    {"no-start", VSH_OT_BOOL, 0, N_("don't start the bridge immediately")},
-    {NULL, 0, 0, NULL}
+    {.name = "interface",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("existing interface name")
+    },
+    {.name = "bridge",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("new bridge device name")
+    },
+    {.name = "no-stp",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("do not enable STP for this bridge")
+    },
+    {.name = "delay",
+     .type = VSH_OT_INT,
+     .flags = 0,
+     .help = N_("number of seconds to squelch traffic on newly connected ports")
+    },
+    {.name = "no-start",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("don't start the bridge immediately")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -715,10 +830,8 @@ cmdInterfaceBridge(vshControl *ctl, const vshCmd *cmd)
     }
 
     /* Name for new bridge device */
-    if (vshCommandOptString(cmd, "bridge", &br_name) <= 0) {
-        vshError(ctl, "%s", _("Missing bridge device name in command"));
+    if (vshCommandOptStringReq(ctl, cmd, "bridge", &br_name) < 0)
         goto cleanup;
-    }
 
     /* make sure "new" device doesn't already exist */
     if ((br_handle = virInterfaceLookupByName(ctl->conn, br_name))) {
@@ -895,16 +1008,27 @@ cmdInterfaceBridge(vshControl *ctl, const vshCmd *cmd)
  * "iface-unbridge" command
  */
 static const vshCmdInfo info_interface_unbridge[] = {
-    {"help", N_("undefine a bridge device after detaching its slave device")},
-    {"desc", N_("unbridge a network device")},
-    {NULL, NULL}
+    {.name = "help",
+     .data = N_("undefine a bridge device after detaching its slave device")
+    },
+    {.name = "desc",
+     .data = N_("unbridge a network device")
+    },
+    {.name = NULL}
 };
 
 static const vshCmdOptDef opts_interface_unbridge[] = {
-    {"bridge", VSH_OT_DATA, VSH_OFLAG_REQ, N_("current bridge device name")},
-    {"no-start", VSH_OT_BOOL, 0,
-     N_("don't start the un-slaved interface immediately (not recommended)")},
-    {NULL, 0, 0, NULL}
+    {.name = "bridge",
+     .type = VSH_OT_DATA,
+     .flags = VSH_OFLAG_REQ,
+     .help = N_("current bridge device name")
+    },
+    {.name = "no-start",
+     .type = VSH_OT_BOOL,
+     .flags = 0,
+     .help = N_("don't start the un-slaved interface immediately (not recommended)")
+    },
+    {.name = NULL}
 };
 
 static bool
@@ -920,7 +1044,7 @@ cmdInterfaceUnbridge(vshControl *ctl, const vshCmd *cmd)
     int if_xml_size;
     xmlDocPtr xml_doc = NULL;
     xmlXPathContextPtr ctxt = NULL;
-    xmlNodePtr top_node, br_node, if_node, cur;
+    xmlNodePtr top_node, if_node, cur;
 
     /* Get a handle to the original device */
     if (!(br_handle = vshCommandOptInterfaceBy(ctl, cmd, "bridge",
@@ -963,12 +1087,12 @@ cmdInterfaceUnbridge(vshControl *ctl, const vshCmd *cmd)
     VIR_FREE(if_name);
 
     /* Find the <bridge> node under <interface>. */
-    if (!(br_node = virXPathNode("./bridge", ctxt))) {
+    if (virXPathNode("./bridge", ctxt) == NULL) {
         vshError(ctl, "%s", _("No bridge node in xml document"));
         goto cleanup;
     }
 
-    if ((if_node = virXPathNode("./bridge/interface[2]", ctxt))) {
+    if (virXPathNode("./bridge/interface[2]", ctxt) != NULL) {
         vshError(ctl, "%s", _("Multiple interfaces attached to bridge"));
         goto cleanup;
     }
@@ -1081,33 +1205,89 @@ cmdInterfaceUnbridge(vshControl *ctl, const vshCmd *cmd)
 }
 
 const vshCmdDef ifaceCmds[] = {
-    {"iface-begin", cmdInterfaceBegin, opts_interface_begin,
-     info_interface_begin, 0},
-    {"iface-bridge", cmdInterfaceBridge, opts_interface_bridge,
-     info_interface_bridge, 0},
-    {"iface-commit", cmdInterfaceCommit, opts_interface_commit,
-     info_interface_commit, 0},
-    {"iface-define", cmdInterfaceDefine, opts_interface_define,
-     info_interface_define, 0},
-    {"iface-destroy", cmdInterfaceDestroy, opts_interface_destroy,
-     info_interface_destroy, 0},
-    {"iface-dumpxml", cmdInterfaceDumpXML, opts_interface_dumpxml,
-     info_interface_dumpxml, 0},
-    {"iface-edit", cmdInterfaceEdit, opts_interface_edit,
-     info_interface_edit, 0},
-    {"iface-list", cmdInterfaceList, opts_interface_list,
-     info_interface_list, 0},
-    {"iface-mac", cmdInterfaceMAC, opts_interface_mac,
-     info_interface_mac, 0},
-    {"iface-name", cmdInterfaceName, opts_interface_name,
-     info_interface_name, 0},
-    {"iface-rollback", cmdInterfaceRollback, opts_interface_rollback,
-     info_interface_rollback, 0},
-    {"iface-start", cmdInterfaceStart, opts_interface_start,
-     info_interface_start, 0},
-    {"iface-unbridge", cmdInterfaceUnbridge, opts_interface_unbridge,
-     info_interface_unbridge, 0},
-    {"iface-undefine", cmdInterfaceUndefine, opts_interface_undefine,
-     info_interface_undefine, 0},
-    {NULL, NULL, NULL, NULL, 0}
+    {.name = "iface-begin",
+     .handler = cmdInterfaceBegin,
+     .opts = opts_interface_begin,
+     .info = info_interface_begin,
+     .flags = 0
+    },
+    {.name = "iface-bridge",
+     .handler = cmdInterfaceBridge,
+     .opts = opts_interface_bridge,
+     .info = info_interface_bridge,
+     .flags = 0
+    },
+    {.name = "iface-commit",
+     .handler = cmdInterfaceCommit,
+     .opts = opts_interface_commit,
+     .info = info_interface_commit,
+     .flags = 0
+    },
+    {.name = "iface-define",
+     .handler = cmdInterfaceDefine,
+     .opts = opts_interface_define,
+     .info = info_interface_define,
+     .flags = 0
+    },
+    {.name = "iface-destroy",
+     .handler = cmdInterfaceDestroy,
+     .opts = opts_interface_destroy,
+     .info = info_interface_destroy,
+     .flags = 0
+    },
+    {.name = "iface-dumpxml",
+     .handler = cmdInterfaceDumpXML,
+     .opts = opts_interface_dumpxml,
+     .info = info_interface_dumpxml,
+     .flags = 0
+    },
+    {.name = "iface-edit",
+     .handler = cmdInterfaceEdit,
+     .opts = opts_interface_edit,
+     .info = info_interface_edit,
+     .flags = 0
+    },
+    {.name = "iface-list",
+     .handler = cmdInterfaceList,
+     .opts = opts_interface_list,
+     .info = info_interface_list,
+     .flags = 0
+    },
+    {.name = "iface-mac",
+     .handler = cmdInterfaceMAC,
+     .opts = opts_interface_mac,
+     .info = info_interface_mac,
+     .flags = 0
+    },
+    {.name = "iface-name",
+     .handler = cmdInterfaceName,
+     .opts = opts_interface_name,
+     .info = info_interface_name,
+     .flags = 0
+    },
+    {.name = "iface-rollback",
+     .handler = cmdInterfaceRollback,
+     .opts = opts_interface_rollback,
+     .info = info_interface_rollback,
+     .flags = 0
+    },
+    {.name = "iface-start",
+     .handler = cmdInterfaceStart,
+     .opts = opts_interface_start,
+     .info = info_interface_start,
+     .flags = 0
+    },
+    {.name = "iface-unbridge",
+     .handler = cmdInterfaceUnbridge,
+     .opts = opts_interface_unbridge,
+     .info = info_interface_unbridge,
+     .flags = 0
+    },
+    {.name = "iface-undefine",
+     .handler = cmdInterfaceUndefine,
+     .opts = opts_interface_undefine,
+     .info = info_interface_undefine,
+     .flags = 0
+    },
+    {.name = NULL}
 };

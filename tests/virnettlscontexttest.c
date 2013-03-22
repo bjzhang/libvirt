@@ -27,12 +27,12 @@
 #include <gnutls/x509.h>
 
 #include "testutils.h"
-#include "util.h"
-#include "virterror_internal.h"
-#include "memory.h"
-#include "logging.h"
+#include "virutil.h"
+#include "virerror.h"
+#include "viralloc.h"
+#include "virlog.h"
 #include "virfile.h"
-#include "command.h"
+#include "vircommand.h"
 #include "virsocketaddr.h"
 #include "gnutls_1_0_compat.h"
 
@@ -160,7 +160,7 @@ testTLSGenerateCert(struct testTLSCertReq *req)
     static char buffer[1024*1024];
     size_t size = sizeof(buffer);
     char serial[5] = { 1, 2, 3, 4, 0 };
-    gnutls_datum_t der = { (unsigned char *)buffer, size };
+    gnutls_datum_t der;
     time_t start = time(NULL) + (60*60*req->start_offset);
     time_t expire = time(NULL) + (60*60*(req->expire_offset
                                          ? req->expire_offset : 24));
@@ -294,6 +294,7 @@ testTLSGenerateCert(struct testTLSCertReq *req)
                                                         der.size,
                                                         req->basicConstraintsCritical)) < 0) {
             VIR_WARN("Failed to set certificate basic constraints %s", gnutls_strerror(err));
+            VIR_FREE(der.data);
             abort();
         }
         asn1_delete_structure(&ext);
@@ -321,6 +322,7 @@ testTLSGenerateCert(struct testTLSCertReq *req)
                                                         der.size,
                                                         req->keyUsageCritical)) < 0) {
             VIR_WARN("Failed to set certificate key usage %s", gnutls_strerror(err));
+            VIR_FREE(der.data);
             abort();
         }
         asn1_delete_structure(&ext);
@@ -352,6 +354,7 @@ testTLSGenerateCert(struct testTLSCertReq *req)
                                                         der.size,
                                                         req->keyPurposeCritical)) < 0) {
             VIR_WARN("Failed to set certificate key purpose %s", gnutls_strerror(err));
+            VIR_FREE(der.data);
             abort();
         }
         asn1_delete_structure(&ext);
@@ -662,7 +665,7 @@ static int testTLSSessionInit(const void *opaque)
             if (rv < 0)
                 goto cleanup;
             if (rv == VIR_NET_TLS_HANDSHAKE_COMPLETE)
-                serverShake = true;
+                clientShake = true;
         }
     } while (!clientShake && !serverShake);
 

@@ -717,6 +717,12 @@ typedef int
                                virStreamPtr st,
                                unsigned int flags);
 typedef int
+    (*virDrvDomainOpenChannel)(virDomainPtr dom,
+                               const char *name,
+                               virStreamPtr st,
+                               unsigned int flags);
+
+typedef int
     (*virDrvDomainOpenGraphics)(virDomainPtr dom,
                                 unsigned int idx,
                                 int fd,
@@ -915,6 +921,11 @@ typedef int
                           unsigned long long minimum,
                           unsigned int flags);
 
+typedef int
+    (*virDrvDomainLxcOpenNamespace)(virDomainPtr dom,
+                                    int **fdlist,
+                                    unsigned int flags);
+
 /**
  * _virDriver:
  *
@@ -1078,6 +1089,7 @@ struct _virDriver {
     virDrvDomainQemuAttach              qemuDomainAttach;
     virDrvDomainQemuAgentCommand        qemuDomainArbitraryAgentCommand;
     virDrvDomainOpenConsole             domainOpenConsole;
+    virDrvDomainOpenChannel             domainOpenChannel;
     virDrvDomainOpenGraphics            domainOpenGraphics;
     virDrvDomainInjectNMI               domainInjectNMI;
     virDrvDomainMigrateBegin3           domainMigrateBegin3;
@@ -1107,6 +1119,7 @@ struct _virDriver {
     virDrvNodeGetCPUMap                 nodeGetCPUMap;
     virDrvDomainFSTrim                  domainFSTrim;
     virDrvDomainSendProcessSignal       domainSendProcessSignal;
+    virDrvDomainLxcOpenNamespace        domainLxcOpenNamespace;
 };
 
 typedef int
@@ -1540,6 +1553,11 @@ typedef int (*virDevMonListAllNodeDevices)(virConnectPtr conn,
 typedef virNodeDevicePtr (*virDevMonDeviceLookupByName)(virConnectPtr conn,
                                                         const char *name);
 
+typedef virNodeDevicePtr (*virDevMonDeviceLookupSCSIHostByWWN)(virConnectPtr conn,
+                                                               const char *wwnn,
+                                                               const char *wwpn,
+                                                               unsigned int flags);
+
 typedef char * (*virDevMonDeviceGetXMLDesc)(virNodeDevicePtr dev,
                                             unsigned int flags);
 
@@ -1571,6 +1589,7 @@ struct _virDeviceMonitor {
     virDevMonListDevices        listDevices;
     virDevMonListAllNodeDevices listAllNodeDevices;
     virDevMonDeviceLookupByName deviceLookupByName;
+    virDevMonDeviceLookupSCSIHostByWWN  deviceLookupSCSIHostByWWN;
     virDevMonDeviceGetXMLDesc   deviceGetXMLDesc;
     virDevMonDeviceGetParent    deviceGetParent;
     virDevMonDeviceNumOfCaps    deviceNumOfCaps;
