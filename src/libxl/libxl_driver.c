@@ -4123,9 +4123,9 @@ libxlDomainOpenConsole(virDomainPtr dom,
             type = LIBXL_CONSOLE_TYPE_SERIAL;
         else
             type = LIBXL_CONSOLE_TYPE_PV;
-        ret = libxl_console_get_tty(priv->ctx, vm->id, num, type, console);
+        ret = libxl_console_get_tty(priv->ctx, vm->id, num, type, &console);
     } else {
-        ret = libxl_primary_console_get_tty(priv->ctx, vm->id, console);
+        ret = libxl_primary_console_get_tty(priv->ctx, vm->id, &console);
     }
     if ( ret )
         goto cleanup;

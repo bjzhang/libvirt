@@ -36,6 +36,7 @@
 # include "configmake.h"
 # include "virportallocator.h"
 # include "virobject.h"
+# include "virconsole.h"
 
 
 # define LIBXL_VNC_PORT_MIN  5900
@@ -61,6 +62,9 @@ struct _libxlDriverPrivate {
     xentoollog_logger *logger;
     /* libxl ctx for driver wide ops; getVersion, getNodeInfo, ... */
     libxl_ctx *ctx;
+
+    /* console */
+    virConsolesPtr cons;
 
     virPortAllocatorPtr reservedVNCPorts;
 
