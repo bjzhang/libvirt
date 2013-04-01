@@ -411,6 +411,9 @@ libxlDomainObjPrivateAlloc(void)
 
     libxl_osevent_register_hooks(priv->ctx, &libxl_event_callbacks, priv);
 
+    if (!(priv->cons = virConsoleAlloc()))
+        return NULL;
+
     return priv;
 }
 
@@ -423,6 +426,7 @@ libxlDomainObjPrivateFree(void *data)
         libxl_evdisable_domain_death(priv->ctx, priv->deathW);
 
     libxl_ctx_free(priv->ctx);
+    virConsoleFree(priv->cons);
     virObjectUnref(priv);
 }
 
