@@ -411,7 +411,7 @@ libxlDomainObjPrivateAlloc(void)
 
     libxl_osevent_register_hooks(priv->ctx, &libxl_event_callbacks, priv);
 
-    if (!(priv->cons = virConsoleAlloc()))
+    if (!(priv->devs = virChrdevAlloc()))
         return NULL;
 
     return priv;
@@ -426,7 +426,7 @@ libxlDomainObjPrivateFree(void *data)
         libxl_evdisable_domain_death(priv->ctx, priv->deathW);
 
     libxl_ctx_free(priv->ctx);
-    virConsoleFree(priv->cons);
+    virChrdevFree(priv->devs);
     virObjectUnref(priv);
 }
 
@@ -4063,7 +4063,7 @@ libxlDomainOpenConsole(virDomainPtr dom,
                   VIR_DOMAIN_CONSOLE_FORCE, -1);
 
     libxlDriverLock(driver);
-    vm = virDomainFindByUUID(&driver->domains, dom->uuid);
+    vm = virDomainObjListFindByUUID(driver->domains, dom->uuid);
     libxlDriverUnlock(driver);
     if (!vm) {
         char uuidstr[VIR_UUID_STRING_BUFLEN];
@@ -4136,8 +4136,8 @@ libxlDomainOpenConsole(virDomainPtr dom,
 
     chr->source.data.file.path = strdup(console);
     /* handle mutually exclusive access to console devices */
-    ret = virConsoleOpen(priv->cons,
-                         chr->source.data.file.path,
+    ret = virChrdevOpen(priv->devs,
+                         &chr->source,
                          st,
                          (flags & VIR_DOMAIN_CONSOLE_FORCE) != 0);
 
@@ -4150,7 +4150,7 @@ libxlDomainOpenConsole(virDomainPtr dom,
 cleanup:
     VIR_FREE(console);
     if (vm)
-        virDomainObjUnlock(vm);
+        virObjectUnlock(vm);
     return ret;
 }
 
