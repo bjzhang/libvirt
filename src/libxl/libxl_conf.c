@@ -347,6 +347,49 @@ error:
 }
 
 static int
+libxlMakeChrdevStr(virDomainChrDefPtr def, char **buf)
+{
+    const char *type = virDomainChrTypeToString(def->source.type);
+
+    if (!type) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       "%s", _("unexpected chr device type"));
+        return -1;
+    }
+
+    switch (def->source.type) {
+        case VIR_DOMAIN_CHR_TYPE_NULL:
+        case VIR_DOMAIN_CHR_TYPE_STDIO:
+        case VIR_DOMAIN_CHR_TYPE_VC:
+        case VIR_DOMAIN_CHR_TYPE_PTY:
+            if (virAsprintf(buf, "%s", type) < 0) {
+                virReportOOMError();
+                return -1;
+            }
+            break;
+
+        case VIR_DOMAIN_CHR_TYPE_FILE:
+        case VIR_DOMAIN_CHR_TYPE_PIPE:
+            if (virAsprintf(buf, "%s:%s", type,
+                            def->source.data.file.path) < 0) {
+                virReportOOMError();
+                return -1;
+            }
+            break;
+
+        case VIR_DOMAIN_CHR_TYPE_DEV:
+            if (virAsprintf(buf, "%s", def->source.data.file.path) < 0) {
+                virReportOOMError();
+                return -1;
+            }
+            break;
+    }
+
+    return 0;
+}
+
+
+static int
 libxlMakeDomBuildInfo(virDomainDefPtr def, libxl_domain_config *d_config)
 {
     libxl_domain_build_info *b_info = &d_config->b_info;
@@ -420,6 +463,10 @@ libxlMakeDomBuildInfo(virDomainDefPtr def, libxl_domain_config *d_config)
             virReportOOMError();
             goto error;
         }
+
+        if (def->nserials &&
+            (libxlMakeChrdevStr(def->serials[0], &b_info->u.hvm.serial) < 0))
+            goto error;
 
         /*
          * The following comment and calculation were taken directly from

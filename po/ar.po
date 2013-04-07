@@ -12,10 +12,10 @@ msgstr ""
 "PO-Revision-Date: 2013-01-28 14:11+0000\n"
 "Last-Translator: Daniel <veillard@redhat.com>\n"
 "Language-Team: LANGUAGE <LL@li.org>\n"
-"Language: ar\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
+"Language: ar\n"
 "Plural-Forms: nplurals=6; plural=n==0 ? 0 : n==1 ? 1 : n==2 ? 2 : n%100>=3 "
 "&& n%100<=10 ? 3 : n%100>=11 && n%100<=99 ? 4 : 5;\n"
 
@@ -2679,8 +2679,8 @@ msgstr ""
 #: src/conf/domain_conf.c:11306
 #, c-format
 msgid ""
-"Target device PCI address %04x:%02x:%02x.%02x does not match source %04x:"
-"%02x:%02x.%02x"
+"Target device PCI address %04x:%02x:%02x.%02x does not match source %04x:%"
+"02x:%02x.%02x"
 msgstr ""
 
 #: src/conf/domain_conf.c:11321
@@ -2760,8 +2760,8 @@ msgstr ""
 #: src/conf/domain_conf.c:11491
 #, c-format
 msgid ""
-"Target network card mac %02x:%02x:%02x:%02x:%02x:%02x does not match source "
-"%02x:%02x:%02x:%02x:%02x:%02x"
+"Target network card mac %02x:%02x:%02x:%02x:%02x:%02x does not match source %"
+"02x:%02x:%02x:%02x:%02x:%02x"
 msgstr ""
 
 #: src/conf/domain_conf.c:11502
@@ -3760,8 +3760,8 @@ msgstr ""
 #: src/conf/network_conf.c:1000
 #, c-format
 msgid ""
-"Missing required service attribute or protocol in DNS SRV record of network "
-"%s"
+"Missing required service attribute or protocol in DNS SRV record of network %"
+"s"
 msgstr ""
 
 #: src/conf/network_conf.c:1019
@@ -4173,8 +4173,8 @@ msgstr ""
 #: src/conf/network_conf.c:3193
 #, c-format
 msgid ""
-"couldn't find an interface entry in network '%s' matching <interface "
-"dev='%s'>"
+"couldn't find an interface entry in network '%s' matching <interface dev='%"
+"s'>"
 msgstr ""
 
 #: src/conf/network_conf.c:3202
@@ -4187,8 +4187,8 @@ msgstr ""
 #: src/conf/network_conf.c:3268
 #, c-format
 msgid ""
-"couldn't find a portgroup entry in network '%s' matching <portgroup "
-"name='%s'>"
+"couldn't find a portgroup entry in network '%s' matching <portgroup name='%"
+"s'>"
 msgstr ""
 
 #: src/conf/network_conf.c:3276
@@ -7194,8 +7194,8 @@ msgstr ""
 #: src/interface/interface_backend_udev.c:795
 #, c-format
 msgid ""
-"Could not get interface information for '%s', which is a enslaved in bond "
-"'%s'"
+"Could not get interface information for '%s', which is a enslaved in bond '%"
+"s'"
 msgstr ""
 
 #: src/interface/interface_backend_udev.c:837
@@ -7226,8 +7226,8 @@ msgstr ""
 #: src/interface/interface_backend_udev.c:909
 #, c-format
 msgid ""
-"Could not get interface information for '%s', which is a member of bridge "
-"'%s'"
+"Could not get interface information for '%s', which is a member of bridge '%"
+"s'"
 msgstr ""
 
 #: src/interface/interface_backend_udev.c:950
@@ -7277,8 +7277,8 @@ msgstr ""
 #: src/libvirt.c:1027
 #, c-format
 msgid ""
-"Malformed 'uri_aliases' config entry '%s', aliases may only contain 'a-Z, "
-"0-9, _, -'"
+"Malformed 'uri_aliases' config entry '%s', aliases may only contain 'a-Z, 0-"
+"9, _, -'"
 msgstr ""
 
 #: src/libvirt.c:1082
@@ -19011,8 +19011,8 @@ msgstr ""
 #: src/storage/storage_backend_fs.c:661
 #, c-format
 msgid ""
-"mkfs is not supported on this platform: Failed to make filesystem of type "
-"'%s' on device '%s'"
+"mkfs is not supported on this platform: Failed to make filesystem of type '%"
+"s' on device '%s'"
 msgstr ""
 
 #: src/storage/storage_backend_fs.c:679
@@ -21042,8 +21042,8 @@ msgstr ""
 #: src/util/virnetdevtap.c:308
 #, c-format
 msgid ""
-"Unable to use MAC address starting with reserved value 0xFE - '%02X:%02X:"
-"%02X:%02X:%02X:%02X' - "
+"Unable to use MAC address starting with reserved value 0xFE - '%02X:%02X:%"
+"02X:%02X:%02X:%02X' - "
 msgstr ""
 
 #: src/util/virnetdevvportprofile.c:186
@@ -23750,8 +23750,8 @@ msgstr ""
 #: src/vmx/vmx.c:2540
 #, c-format
 msgid ""
-"Expecting VMX entry '%s' to be 'generated' or 'static' or 'vpx' but found "
-"'%s'"
+"Expecting VMX entry '%s' to be 'generated' or 'static' or 'vpx' but found '%"
+"s'"
 msgstr ""
 
 #: src/vmx/vmx.c:2557
@@ -23843,8 +23843,8 @@ msgstr ""
 #: src/vmx/vmx.c:3179
 #, c-format
 msgid ""
-"Expecting domain XML attribute 'cpuset' of entry 'vcpu' to contain at least "
-"%d CPU(s)"
+"Expecting domain XML attribute 'cpuset' of entry 'vcpu' to contain at least %"
+"d CPU(s)"
 msgstr ""
 
 #: src/vmx/vmx.c:3226
