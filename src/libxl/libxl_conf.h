@@ -36,6 +36,7 @@
 # include "configmake.h"
 # include "virportallocator.h"
 # include "virobject.h"
+# include "virchrdev.h"
 
 
 # define LIBXL_VNC_PORT_MIN  5900
@@ -91,6 +92,9 @@ struct _libxlDomainObjPrivate {
     /* per domain libxl ctx */
     libxl_ctx *ctx;
     libxl_evgen_domain_death *deathW;
+
+    /* console */
+    virChrdevsPtr devs;
 
     /* list of libxl timeout registrations */
     libxlEventHookInfoPtr timerRegistrations;
