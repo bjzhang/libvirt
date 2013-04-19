@@ -186,12 +186,6 @@ libxlFDRegisterEventHook(void *priv, int fd, void **hndp,
         vir_events |= VIR_EVENT_HANDLE_READABLE;
     if (events & POLLOUT)
         vir_events |= VIR_EVENT_HANDLE_WRITABLE;
-    info->id = virEventAddHandle(fd, vir_events, libxlFDEventCallback,
-                                 info, libxlEventHookInfoFree);
-    if (info->id < 0) {
-        VIR_FREE(info);
-        return -1;
-    }
 
     info->priv = priv;
     /*
@@ -203,6 +197,14 @@ libxlFDRegisterEventHook(void *priv, int fd, void **hndp,
 
     info->xl_priv = xl_priv;
     *hndp = info;
+
+    info->id = virEventAddHandle(fd, vir_events, libxlFDEventCallback,
+                                 info, libxlEventHookInfoFree);
+    if (info->id < 0) {
+        virObjectUnref(info->priv);
+        VIR_FREE(info);
+        return -1;
+    }
 
     return 0;
 }
