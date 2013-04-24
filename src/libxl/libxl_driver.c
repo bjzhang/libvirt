@@ -296,12 +296,6 @@ libxlTimeoutRegisterEventHook(void *priv,
     } else {
         timeout = res.tv_sec * 1000 + (res.tv_usec + 999) / 1000;
     }
-    info->id = virEventAddTimeout(timeout, libxlTimerCallback,
-                                  info, libxlEventHookInfoFree);
-    if (info->id < 0) {
-        VIR_FREE(info);
-        return -1;
-    }
 
     info->priv = priv;
     /*
@@ -316,6 +310,15 @@ libxlTimeoutRegisterEventHook(void *priv,
     virObjectUnlock(info->priv);
     info->xl_priv = xl_priv;
     *hndp = info;
+
+    info->id = virEventAddTimeout(timeout, libxlTimerCallback,
+                                  info, libxlEventHookInfoFree);
+    if (info->id < 0) {
+        virObjectUnref(info->priv);
+        VIR_FREE(info);
+        return -1;
+    }
+
 
     return 0;
 }
