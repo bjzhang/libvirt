@@ -334,100 +334,6 @@ error:
 }
 
 static int
-libxlMakeChrdevStr(virDomainChrDefPtr def, char **buf)
-{
-    const char *type = virDomainChrTypeToString(def->source.type);
-    int ret;
-
-    if (!type) {
-        virReportError(VIR_ERR_INTERNAL_ERROR,
-                       "%s", _("unexpected chr device type"));
-        return -1;
-    }
-
-    switch (def->source.type) {
-        case VIR_DOMAIN_CHR_TYPE_NULL:
-        case VIR_DOMAIN_CHR_TYPE_STDIO:
-        case VIR_DOMAIN_CHR_TYPE_VC:
-        case VIR_DOMAIN_CHR_TYPE_PTY:
-            if (virAsprintf(buf, "%s", type) < 0) {
-                virReportOOMError();
-                return -1;
-            }
-            break;
-
-        case VIR_DOMAIN_CHR_TYPE_FILE:
-        case VIR_DOMAIN_CHR_TYPE_PIPE:
-            if (virAsprintf(buf, "%s:%s", type,
-                            def->source.data.file.path) < 0) {
-                virReportOOMError();
-                return -1;
-            }
-            break;
-
-        case VIR_DOMAIN_CHR_TYPE_DEV:
-            if (virAsprintf(buf, "%s", def->source.data.file.path) < 0) {
-                virReportOOMError();
-                return -1;
-            }
-            break;
-        case VIR_DOMAIN_CHR_TYPE_UDP: {
-            const char *connectHost = def->source.data.udp.connectHost;
-            const char *bindHost = def->source.data.udp.bindHost;
-            const char *bindService  = def->source.data.udp.bindService;
-
-            if (connectHost == NULL)
-                connectHost = "";
-            if (bindHost == NULL)
-                bindHost = "";
-            if (bindService == NULL)
-                bindService = "0";
-
-            ret = virAsprintf(buf, "udp:%s:%s@%s:%s",
-                              connectHost,
-                              def->source.data.udp.connectService,
-                              bindHost,
-                              bindService);
-            if ( ret < 0) {
-                virReportOOMError();
-                return -1;
-            }
-            break;
-        }
-        case VIR_DOMAIN_CHR_TYPE_TCP:
-            if (def->source.data.tcp.protocol == VIR_DOMAIN_CHR_TCP_PROTOCOL_TELNET) {
-                ret = virAsprintf(buf, "telnet:%s:%s%s",
-                                  def->source.data.tcp.host,
-                                  def->source.data.tcp.service,
-                                  def->source.data.tcp.listen ? ",server,nowait" : "");
-            } else {
-                ret = virAsprintf(buf, "tcp:%s:%s%s",
-                                  def->source.data.tcp.host,
-                                  def->source.data.tcp.service,
-                                  def->source.data.tcp.listen ? ",server,nowait" : "");
-            }
-            if ( ret < 0) {
-                virReportOOMError();
-                return -1;
-            }
-            break;
-
-        case VIR_DOMAIN_CHR_TYPE_UNIX:
-            ret = virAsprintf(buf, "unix:%s%s",
-                              def->source.data.nix.path,
-                              def->source.data.nix.listen ? ",server,nowait" : "");
-            if ( ret < 0) {
-                virReportOOMError();
-                return -1;
-            }
-            break;
-    }
-
-    return 0;
-}
-
-
-static int
 libxlMakeDomBuildInfo(virDomainDefPtr def, libxl_domain_config *d_config)
 {
     libxl_domain_build_info *b_info = &d_config->b_info;
@@ -501,10 +407,6 @@ libxlMakeDomBuildInfo(virDomainDefPtr def, libxl_domain_config *d_config)
             virReportOOMError();
             goto error;
         }
-
-        if (def->nserials &&
-            (libxlMakeChrdevStr(def->serials[0], &b_info->u.hvm.serial) < 0))
-            goto error;
 
         /*
          * The following comment and calculation were taken directly from
