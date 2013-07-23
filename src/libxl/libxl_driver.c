@@ -105,6 +105,9 @@ static virClassPtr libxlDomainObjPrivateClass;
 
 static libxlDriverPrivatePtr libxl_driver = NULL;
 
+static libxl_asyncop_how *g_ao_how_p;
+static int ao_how_enable = 0;
+
 /* Function declarations */
 static int
 libxlDomainManagedSaveLoad(virDomainObjPtr vm,
@@ -982,10 +985,33 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
 
     if (restore_fd < 0)
         ret = libxl_domain_create_new(priv->ctx, &d_config,
-                                      &domid, NULL, NULL);
+                                      &domid, g_ao_how_p, NULL);
     else
         ret = libxl_domain_create_restore(priv->ctx, &d_config, &domid,
-                                          restore_fd, NULL, NULL);
+                                          restore_fd, g_ao_how_p, NULL);
+
+    if (NULL != g_ao_how_p) {
+        VIR_INFO("Waiting for libxl event");
+
+        while (1) {
+            libxl_event *xl_event;
+            ret = libxl_event_wait(priv->ctx, &xl_event, LIBXL_EVENTMASK_ALL, 0,0);
+            if (ret) {
+                VIR_ERROR("libxl_event_wait fail");
+                break;
+            }
+
+            switch (xl_event->type) {
+            case LIBXL_EVENT_TYPE_OPERATION_COMPLETE:
+                VIR_INFO("OPERATION_COMPLETE");
+                break;
+            default:
+                VIR_INFO("got %d xl_event", xl_event->type);
+                break;
+            }
+            break;
+        }
+    }
 
     if (ret) {
         if (restore_fd < 0)
@@ -1150,6 +1176,9 @@ libxlStateCleanup(void)
     libxlDriverUnlock(libxl_driver);
     virMutexDestroy(&libxl_driver->lock);
     VIR_FREE(libxl_driver);
+
+    if (1 == ao_how_enable)
+        VIR_FREE(g_ao_how_p);
 
     return 0;
 }
@@ -1354,7 +1383,15 @@ libxlStateInitialize(bool privileged,
     virDomainObjListForEach(libxl_driver->domains, libxlDomainManagedSaveLoad,
                             libxl_driver);
 
-    libxlDriverUnlock(libxl_driver);
+    if (virFileExists("/var/lib/libvirt/libxl/ao_how")) {
+        VIR_INFO("use ao_how");
+        ao_how_enable = 1;
+        if(VIR_ALLOC(g_ao_how_p) < 0)
+            goto error;
+    } else {
+        VIR_INFO("do not use ao_how");
+        ao_how_enable = 0;
+    }
 
     return 0;
 
@@ -2321,7 +2358,7 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
         goto cleanup;
     }
 
-    if (libxl_domain_suspend(priv->ctx, vm->def->id, fd, 0, NULL) != 0) {
+    if (libxl_domain_suspend(priv->ctx, vm->def->id, fd, 0, g_ao_how_p) != 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Failed to save domain '%d' with libxenlight"),
                        vm->def->id);
