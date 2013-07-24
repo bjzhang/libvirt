@@ -50,6 +50,8 @@
 #include "virsysinfo.h"
 #include "viraccessapicheck.h"
 
+#define AO_HOW
+
 #define VIR_FROM_THIS VIR_FROM_LIBXL
 
 #define LIBXL_DOM_REQ_POWEROFF 0
@@ -1004,7 +1006,11 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
 
         while (1) {
             libxl_event *xl_event;
+            virObjectUnlock(vm);
+            libxlDriverUnlock(driver);
             ret = libxl_event_wait(priv->ctx, &xl_event, LIBXL_EVENTMASK_ALL, 0,0);
+            libxlDriverLock(driver);
+            virObjectLock(vm);
             if (ret) {
                 VIR_ERROR("libxl_event_wait fail");
                 break;
@@ -2368,12 +2374,48 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
         goto cleanup;
     }
 
+
+#ifdef AO_HOW
+    if (ao_how_enable)
+        if(VIR_ALLOC(ao_how_p) < 0)
+            goto cleanup;
+#endif
     if (libxl_domain_suspend(priv->ctx, vm->def->id, fd, 0, ao_how_p) != 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Failed to save domain '%d' with libxenlight"),
                        vm->def->id);
         goto cleanup;
     }
+
+#ifdef AO_HOW
+    if (NULL != ao_how_p) {
+        VIR_INFO("Waiting for libxl event");
+
+        while (1) {
+            libxl_event *xl_event;
+            virObjectUnlock(vm);
+            libxlDriverUnlock(driver);
+            ret = libxl_event_wait(priv->ctx, &xl_event, LIBXL_EVENTMASK_ALL, 0,0);
+            libxlDriverLock(driver);
+            virObjectLock(vm);
+            if (ret) {
+                VIR_ERROR("libxl_event_wait fail");
+                break;
+            }
+
+            switch (xl_event->type) {
+            case LIBXL_EVENT_TYPE_OPERATION_COMPLETE:
+                VIR_INFO("OPERATION_COMPLETE");
+                break;
+            default:
+                VIR_INFO("got %d xl_event", xl_event->type);
+                break;
+            }
+            break;
+        }
+    }
+    VIR_FREE(ao_how_p);
+#endif
 
     event = virDomainEventNewFromObj(vm, VIR_DOMAIN_EVENT_STOPPED,
                                          VIR_DOMAIN_EVENT_STOPPED_SAVED);
