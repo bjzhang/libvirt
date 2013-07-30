@@ -31,6 +31,7 @@
 #include <libxl_utils.h>
 #include <fcntl.h>
 #include <regex.h>
+#include <unistd.h> // for sleep
 
 #include "internal.h"
 #include "virlog.h"
@@ -2389,6 +2390,35 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
 
 #ifdef AO_HOW
     if (NULL != ao_how_p) {
+        VIR_INFO("Waiting for saving");
+
+        while (1) {
+            virObjectUnlock(vm);
+            libxlDriverUnlock(driver);
+            if (virFileExists("/var/lib/libvirt/libxl/save_complete")) {
+                libxlDriverLock(driver);
+                virObjectLock(vm);
+                break;
+            } else {
+                sleep(1);
+            }
+            libxlDriverLock(driver);
+            virObjectLock(vm);
+        }
+    }
+#endif
+
+    event = virDomainEventNewFromObj(vm, VIR_DOMAIN_EVENT_STOPPED,
+                                         VIR_DOMAIN_EVENT_STOPPED_SAVED);
+
+    if (libxlVmReap(driver, vm, VIR_DOMAIN_SHUTOFF_SAVED) != 0) {
+        virReportError(VIR_ERR_INTERNAL_ERROR,
+                       _("Failed to destroy domain '%d'"), vm->def->id);
+        goto cleanup;
+    }
+
+#ifdef AO_HOW
+    if (NULL != ao_how_p) {
         VIR_INFO("Waiting for libxl event");
 
         while (1) {
@@ -2416,15 +2446,6 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     }
     VIR_FREE(ao_how_p);
 #endif
-
-    event = virDomainEventNewFromObj(vm, VIR_DOMAIN_EVENT_STOPPED,
-                                         VIR_DOMAIN_EVENT_STOPPED_SAVED);
-
-    if (libxlVmReap(driver, vm, VIR_DOMAIN_SHUTOFF_SAVED) != 0) {
-        virReportError(VIR_ERR_INTERNAL_ERROR,
-                       _("Failed to destroy domain '%d'"), vm->def->id);
-        goto cleanup;
-    }
 
     vm->hasManagedSave = true;
     ret = 0;
