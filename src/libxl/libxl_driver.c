@@ -2405,6 +2405,36 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     }
 
 #ifdef AO_HOW
+#if 1
+    if (NULL != ao_how_p) {
+        VIR_INFO("Waiting for libxl event");
+
+        while (1) {
+            libxl_event *xl_event;
+            virObjectUnlock(vm);
+            libxlDriverUnlock(driver);
+            ret = libxl_event_check(priv->ctx, &xl_event, LIBXL_EVENTMASK_ALL, 0,0);
+            libxlDriverLock(driver);
+            virObjectLock(vm);
+            if (ret) {
+                VIR_ERROR("libxl_event_wait fail");
+                sleep(1);
+                continue;
+            }
+
+            switch (xl_event->type) {
+            case LIBXL_EVENT_TYPE_OPERATION_COMPLETE:
+                VIR_INFO("OPERATION_COMPLETE");
+                break;
+            default:
+                VIR_INFO("got %d xl_event", xl_event->type);
+                break;
+            }
+            break;
+        }
+    }
+
+#else
     if (NULL != ao_how_p) {
         VIR_INFO("Waiting for libxl event");
 
@@ -2431,6 +2461,7 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
             break;
         }
     }
+#endif // #if 0
 #endif
 
     event = virDomainEventNewFromObj(vm, VIR_DOMAIN_EVENT_STOPPED,
