@@ -415,6 +415,7 @@ typedef struct {
     pid_t pid;
     int status;
     int id;
+    int called;
 } sigchild_info;
 
 static pid_t
@@ -424,7 +425,7 @@ libxl_fork_replacement(void *user)
     pid_t pid;
 
     pid = fork();
-    VIR_INFO("pid is %d", pid);
+    VIR_INFO("libxl_fork_replacement pid is %d", pid);
     if (pid > 0)
         info->pid = pid;
     return pid;
@@ -442,15 +443,17 @@ libxl_sigchld_callback(int watch ATTRIBUTE_UNUSED,
                      void *fd_info)
 {
     sigchild_info *info = fd_info;
+    int rc;
 
-    if (!sigchld_callback_done) {
-        sigchld_callback_done = 1;
-        VIR_INFO("vir_events: %d", vir_events);
-        VIR_INFO("call libxl_childproc_reaped");
-        libxl_childproc_reaped(info->ctx, info->pid, info->status);
-    } else {
-        VIR_INFO("skip libxl_childproc_reaped");
-    }
+    if (1 == info->called)
+        return;
+
+    info->called = 1;
+    VIR_INFO("vir_events: %d", vir_events);
+    VIR_INFO("libxl_childproc_reaped pid: %d", info->pid);
+    rc = libxl_childproc_reaped(info->ctx, info->pid, info->status);
+    VIR_INFO("libxl_childproc_reaped rc: %d", rc);
+
 }
 
 static void *
@@ -769,7 +772,7 @@ libxlVmReap(libxlDriverPrivatePtr driver,
         vir_events |= VIR_EVENT_HANDLE_WRITABLE;
 
         pipe_fd = libxl_get_pipe_handle(priv->ctx, 0);
-        sigchld_callback_done = 0;
+        info.called = 0;
         info.id = virEventAddHandle(pipe_fd, vir_events, libxl_sigchld_callback,
                                      &info, NULL);
         VIR_INFO("id is %d", info.id);
@@ -790,11 +793,6 @@ libxlVmReap(libxlDriverPrivatePtr driver,
             sleep(1);
             libxlDriverLock(driver);
             virObjectLock(vm);
-            if (1 == sigchld_callback_done) {
-                VIR_INFO("to remove sigchld_callback");
-                virEventRemoveHandle(info.id);
-                sigchld_callback_done++;
-            }
             if (ao_complete)
                 break;
         }
@@ -2494,7 +2492,6 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
         vir_events |= VIR_EVENT_HANDLE_WRITABLE;
 
         ctx = priv->ctx;
-        //pipe_fd = ctx->sigchld_selfpipe[0];
         pipe_fd = libxl_get_pipe_handle(ctx, 0);
         sigchld_callback_done = 0;
         info.id = virEventAddHandle(pipe_fd, vir_events, libxl_sigchld_callback,
