@@ -407,6 +407,7 @@ static const libxl_osevent_hooks libxl_event_callbacks = {
 static void
 ao_how_callback(libxl_ctx *ctx ATTRIBUTE_UNUSED, int rc ATTRIBUTE_UNUSED, void *for_callback ATTRIBUTE_UNUSED)
 {
+    VIR_INFO("%s", __FUNCTION__);
     return;
 }
 
@@ -423,6 +424,7 @@ libxl_fork_replacement(void *user)
 {
     sigchild_info *info = user;
     pid_t pid;
+    size_t i;
 
     pid = fork();
     VIR_INFO("libxl_fork_replacement pid is %d", pid);
@@ -761,15 +763,13 @@ libxlVmReap(libxlDriverPrivatePtr driver,
         if(VIR_ALLOC(ao_how_p) < 0)
             return -1;
         if (ao_how_enable_cb)
-            return -1;
             ao_how_p->callback = ao_how_callback;
 
         ao_complete = 0;
 
         info.ctx = priv->ctx;
         libxl_childproc_setmode(priv->ctx, &childproc_hooks, &info);
-        vir_events |= VIR_EVENT_HANDLE_READABLE;
-        vir_events |= VIR_EVENT_HANDLE_WRITABLE;
+        vir_events |= VIR_EVENT_HANDLE_READABLE; vir_events |= VIR_EVENT_HANDLE_WRITABLE;
 
         pipe_fd = libxl_get_pipe_handle(priv->ctx, 0);
         info.called = 0;
