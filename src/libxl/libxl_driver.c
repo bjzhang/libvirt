@@ -411,30 +411,44 @@ ao_how_callback(libxl_ctx *ctx ATTRIBUTE_UNUSED, int rc ATTRIBUTE_UNUSED, void *
     return;
 }
 
+#define MAX_CHILD 100
 typedef struct {
-    libxl_ctx *ctx;
     pid_t pid;
     int status;
-    int id;
     int called;
+    int pending;
+} per_sigchild_info;
+
+typedef struct {
+    libxl_ctx *ctx;
+    int id;
+    per_sigchild_info child[MAX_CHILD];
 } sigchild_info;
+
+sigchild_info child_info;
+libxl_asyncop_how ao_how;
 
 static pid_t
 libxl_fork_replacement(void *user)
 {
     sigchild_info *info = user;
     pid_t pid;
-    size_t i;
+    size_t i = 0;
 
     pid = fork();
     VIR_INFO("libxl_fork_replacement pid is %d", pid);
-    if (pid > 0)
-        info->pid = pid;
+    if (pid > 0) {
+        while(info->child[i].pid != 0) {
+            //TODO check overflow
+            i++;
+        }
+        info->child[i].pid = pid;
+    }
     return pid;
 }
 
 static const libxl_childproc_hooks childproc_hooks = {
-    .chldowner = libxl_sigchld_owner_libxl_always,
+    .chldowner = libxl_sigchld_owner_mainloop,
     .fork_replacement = libxl_fork_replacement,
 };
 
@@ -477,6 +491,13 @@ libxlDomainObjPrivateAlloc(void)
 
     libxl_osevent_register_hooks(priv->ctx, &libxl_event_callbacks, priv);
 
+    if (ao_how_enable) {
+        if (ao_how_enable_cb)
+            ao_how.callback = ao_how_callback;
+
+        libxl_childproc_setmode(priv->ctx, &childproc_hooks, &info);
+        libxl_sigchld_register();
+    }
     return priv;
 }
 
@@ -760,22 +781,7 @@ libxlVmReap(libxlDriverPrivatePtr driver,
     int pipe_fd;
 
     if (ao_how_enable) {
-        if(VIR_ALLOC(ao_how_p) < 0)
-            return -1;
-        if (ao_how_enable_cb)
-            ao_how_p->callback = ao_how_callback;
-
-        ao_complete = 0;
-
-        info.ctx = priv->ctx;
-        libxl_childproc_setmode(priv->ctx, &childproc_hooks, &info);
-        vir_events |= VIR_EVENT_HANDLE_READABLE; vir_events |= VIR_EVENT_HANDLE_WRITABLE;
-
-        pipe_fd = libxl_get_pipe_handle(priv->ctx, 0);
-        info.called = 0;
-        info.id = virEventAddHandle(pipe_fd, vir_events, libxl_sigchld_callback,
-                                     &info, NULL);
-        VIR_INFO("id is %d", info.id);
+        ao_how_init(priv, &info);
     }
 
     if (libxl_domain_destroy(priv->ctx, vm->def->id, ao_how_p) < 0) {
@@ -785,17 +791,7 @@ libxlVmReap(libxlDriverPrivatePtr driver,
     }
 
     if (ao_how_enable) {
-        VIR_INFO("Waiting for libxl event");
-
-        while (1) {
-            virObjectUnlock(vm);
-            libxlDriverUnlock(driver);
-            sleep(1);
-            libxlDriverLock(driver);
-            virObjectLock(vm);
-            if (ao_complete)
-                break;
-        }
+        ao_how_wait(driver, vm, &info);
     }
 
     VIR_FREE(ao_how_p);
@@ -1027,7 +1023,6 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     char *managed_save_path = NULL;
     int managed_save_fd = -1;
     libxlDomainObjPrivatePtr priv = vm->privateData;
-    libxl_asyncop_how *ao_how_p = NULL;
 
     /* If there is a managed saved state restore it instead of starting
      * from scratch. The old state is removed once the restoring succeeded. */
@@ -1084,9 +1079,9 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
 
     /* use as synchronous operations => ao_how = NULL and no intermediate reports => ao_progress = NULL */
 
-    if (ao_how_enable)
-        if(VIR_ALLOC(ao_how_p) < 0)
-            goto error;
+    if (ao_how_enable) {
+        ao_how_init(priv, &info);
+    }
 
     if (restore_fd < 0)
         ret = libxl_domain_create_new(priv->ctx, &d_config,
@@ -1096,30 +1091,7 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
                                           restore_fd, ao_how_p, NULL);
 
     if (ao_how_enable) {
-        VIR_INFO("Waiting for libxl event");
-
-        while (1) {
-            libxl_event *xl_event;
-            virObjectUnlock(vm);
-            libxlDriverUnlock(driver);
-            ret = libxl_event_wait(priv->ctx, &xl_event, LIBXL_EVENTMASK_ALL, 0,0);
-            libxlDriverLock(driver);
-            virObjectLock(vm);
-            if (ret) {
-                VIR_ERROR("libxl_event_wait fail");
-                break;
-            }
-
-            switch (xl_event->type) {
-            case LIBXL_EVENT_TYPE_OPERATION_COMPLETE:
-                VIR_INFO("OPERATION_COMPLETE");
-                break;
-            default:
-                VIR_INFO("got %d xl_event", xl_event->type);
-                break;
-            }
-            break;
-        }
+        ao_how_wait(driver, vm);
     }
 
     VIR_FREE(ao_how_p);
@@ -1735,6 +1707,79 @@ libxlConnectNumOfDomains(virConnectPtr conn)
     libxlDriverUnlock(driver);
 
     return n;
+}
+
+void ao_how_init(libxlDomainObjPrivatePtr priv ATTRIBUTE_UNUSED, sigchild_info *info ATTRIBUTE_UNUSED)
+{
+    ao_complete = 0;
+}
+
+void ao_how_wait(libxlDriverPrivatePtr driver, virDomainObjPtr vm)
+{
+    VIR_INFO("Waiting for libxl event");
+    size_t i;
+
+    while (1) {
+        virObjectUnlock(vm);
+        libxlDriverUnlock(driver);
+        sleep(1);
+        libxlDriverLock(driver);
+        virObjectLock(vm);
+        if (ao_complete) {
+            VIR_INFO("got ao_complete, exit");
+            break;
+        }
+
+        i = 0;
+        while(child_info.child[i].pid != 0) {
+            if(child_info.child[i].pending) {
+                VIR_INFO("Process child reap: pid<%d>, status<%d>", child_info->child[i].pid, child_info->child[i].status);
+                libxl_childproc_reaped(child_info->ctx, child_info->child[i].pid, child_info->child[i].status);
+                child_info.child[i].pending = 0;
+            }
+
+            i++;
+        }
+    }
+}
+
+static struct sigaction sigchld_saved_action;
+
+static void sigchld_handler(int signo)
+{
+    int status;
+    pid_t pid = waitpid(-1, &status, WNOHANG);
+    size_t i = 0;
+
+    if (pid == 0) return;
+
+    if (pid == -1) {
+        if (errno == ECHILD) return;
+        if (errno == EINTR) continue;
+        LIBXL__EVENT_DISASTER(egc, "waitpid() failed", errno, 0);
+        return;
+    }
+    //handle child reap in mainloop. because i do not have(or should not have?) ctx here.
+    while(child_info.child[i].pid != pid) {
+        //TODO check overflow
+        i++;
+    }
+    child_info.child[i].pid = pid;
+    child_info.child[i].status = status;
+    child_info.child[i].pending = 1;
+}
+
+void libxl_sigchld_register(void)
+{
+    int r;
+    struct sigaction ours;
+
+    memset(&ours,0,sizeof(ours));
+    ours.sa_handler = sigchld_handler;
+    sigemptyset(&ours.sa_mask);
+    ours.sa_flags = SA_NOCLDSTOP | SA_RESTART;
+    r = sigaction(SIGCHLD, &ours, &sigchld_saved_action);
+    assert(!r);
 }
 
 static virDomainPtr
@@ -2479,24 +2524,7 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     }
 
     if (ao_how_enable) {
-        if(VIR_ALLOC(ao_how_p) < 0)
-            goto cleanup;
-        if (ao_how_enable_cb)
-            ao_how_p->callback = ao_how_callback;
-
-        ao_complete = 0;
-
-        info.ctx = priv->ctx;
-        libxl_childproc_setmode(priv->ctx, &childproc_hooks, &info);
-        vir_events |= VIR_EVENT_HANDLE_READABLE;
-        vir_events |= VIR_EVENT_HANDLE_WRITABLE;
-
-        ctx = priv->ctx;
-        pipe_fd = libxl_get_pipe_handle(ctx, 0);
-        sigchld_callback_done = 0;
-        info.id = virEventAddHandle(pipe_fd, vir_events, libxl_sigchld_callback,
-                                     &info, NULL);
-        VIR_INFO("id is %d", info.id);
+        ao_how_init(priv, &info);
     }
 
     if (libxl_domain_suspend(priv->ctx, vm->def->id, fd, 0, ao_how_p) != 0) {
@@ -2507,23 +2535,9 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     }
 
     if (ao_how_enable) {
-        VIR_INFO("Waiting for libxl event");
-
-        while (1) {
-            virObjectUnlock(vm);
-            libxlDriverUnlock(driver);
-            sleep(1);
-            libxlDriverLock(driver);
-            virObjectLock(vm);
-            if (1 == sigchld_callback_done) {
-                VIR_INFO("to remove sigchld_callback");
-                virEventRemoveHandle(info.id);
-                sigchld_callback_done++;
-            }
-            if (ao_complete)
-                break;
-        }
+        ao_how_wait(driver, vm);
     }
+    VIR_FREE(ao_how_p);
 
     event = virDomainEventNewFromObj(vm, VIR_DOMAIN_EVENT_STOPPED,
                                          VIR_DOMAIN_EVENT_STOPPED_SAVED);
@@ -2534,7 +2548,6 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
         goto cleanup;
     }
 
-    VIR_FREE(ao_how_p);
 
     vm->hasManagedSave = true;
     ret = 0;
