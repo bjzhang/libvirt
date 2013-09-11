@@ -32,6 +32,7 @@
 #include <libxl_utils.h>
 #include <fcntl.h>
 #include <regex.h>
+#include <unistd.h> // for sleep
 
 #include "internal.h"
 #include "virlog.h"
@@ -329,11 +330,22 @@ libxlVmReap(libxlDriverPrivatePtr driver,
             virDomainShutoffReason reason)
 {
     libxlDomainObjPrivatePtr priv = vm->privateData;
+    sigchild_info info;
+    libxl_asyncop_how *ao_how_p = NULL;
 
-    if (libxl_domain_destroy(priv->ctx, vm->def->id, NULL) < 0) {
+    if (ao_how_enable) {
+        ao_how_init(priv, &info);
+        ao_how_p = &ao_how;
+    }
+
+    if (libxl_domain_destroy(priv->ctx, vm->def->id, ao_how_p) < 0) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
                        _("Unable to cleanup domain %d"), vm->def->id);
         return -1;
+    }
+
+    if (ao_how_enable) {
+        ao_how_wait(driver, vm);
     }
 
     libxlVmCleanup(driver, vm, reason);
@@ -365,6 +377,10 @@ libxlEventHandler(void *data, VIR_LIBXL_EVENT_CONST libxl_event *event)
 
     if (event->type == LIBXL_EVENT_TYPE_DOMAIN_SHUTDOWN) {
         virDomainShutoffReason reason;
+        VIR_INFO("LIBXL_EVENT_TYPE_DOMAIN_SHUTDOWN");
+        if (!ao_how_enable_cb) {
+            ao_complete=1;
+        }
 
         /*
          * Similar to the xl implementation, ignore SUSPEND.  Any actions needed
@@ -401,6 +417,11 @@ libxlEventHandler(void *data, VIR_LIBXL_EVENT_CONST libxl_event *event)
             default:
                 VIR_INFO("Unhandled shutdown_reason %d", xl_reason);
                 break;
+        }
+    } else if ( event->type == LIBXL_EVENT_TYPE_OPERATION_COMPLETE ) {
+        VIR_INFO("LIBXL_EVENT_TYPE_OPERATION_COMPLETE");
+        if (!ao_how_enable_cb) {
+            ao_complete=1;
         }
     }
 
@@ -555,6 +576,7 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     int managed_save_fd = -1;
     libxlDomainObjPrivatePtr priv = vm->privateData;
     libxlDriverConfigPtr cfg = libxlDriverConfigGet(driver);
+    libxl_asyncop_how *ao_how_p = NULL;
 
     if (libxlDomainObjPrivateInitCtx(vm) < 0)
         goto cleanup;
@@ -621,6 +643,12 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
 
     /* use as synchronous operations => ao_how = NULL and no intermediate reports => ao_progress = NULL */
 
+
+    if (ao_how_enable) {
+        ao_how_init(priv, &child_info);
+        ao_how_p = &ao_how;
+    }
+
     virObjectUnlock(vm);
     if (restore_fd < 0)
         res = libxl_domain_create_new(priv->ctx, &d_config,
@@ -629,6 +657,12 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
         res = libxl_domain_create_restore(priv->ctx, &d_config, &domid,
                                           restore_fd, NULL, NULL);
     virObjectLock(vm);
+
+    if (ao_how_enable) {
+        //TODO: error handle after wait.
+        ao_how_wait(driver, vm);
+    }
+
 
     fprintf(stderr, "### libxl_domain_create_new done: domid = %d\n", domid);
     if (res) {
@@ -935,6 +969,21 @@ libxlStateInitialize(bool privileged,
 
     virDomainObjListForEach(libxl_driver->domains, libxlDomainManagedSaveLoad,
                             libxl_driver);
+
+    if (virFileExists("/var/lib/libvirt/libxl/ao_how")) {
+        VIR_INFO("use ao_how");
+        ao_how_enable = 1;
+        if (virFileExists("/var/lib/libvirt/libxl/ao_how_cb")) {
+            VIR_INFO("use ao_how callback function");
+            ao_how_enable_cb = 1;
+        } else {
+            VIR_INFO("do not use ao_how callback function");
+            ao_how_enable_cb = 0;
+        }
+    } else {
+        VIR_INFO("do not use ao_how");
+        ao_how_enable = 0;
+    }
 
     return 0;
 
@@ -1772,6 +1821,7 @@ libxlDomainGetInfo(virDomainPtr dom, virDomainInfoPtr info)
     libxl_dominfo d_info;
     libxlDomainObjPrivatePtr priv;
     int ret = -1;
+    sigchild_info info;
 
     if (!(vm = libxlDomObjFromDomain(dom)))
         goto cleanup;
@@ -1846,6 +1896,7 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     int fd = -1;
     int ret = -1;
     int res;
+    libxl_asyncop_how *ao_how_p = NULL;
 
     if (libxlDomainObjBeginJob(driver, vm, LIBXL_JOB_MODIFY) < 0) {
         fprintf(stderr, "### libxlDoDomainSave: libxlDomainObjBeginJob failed\n");
@@ -1892,9 +1943,18 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
      * job is running and a ref is held on vm, so safe to unlock while
      * the save is in progress, allowing query operations to proceed.
      */
+    if (ao_how_enable) {
+        ao_how_init(priv, &info);
+        ao_how_p = &ao_how;
+    }
+
     virObjectUnlock(vm);
     res = libxl_domain_suspend(priv->ctx, vm->def->id, fd, 0, NULL);
     virObjectLock(vm);
+
+    if (ao_how_enable) {
+        ao_how_wait(driver, vm);
+    }
 
     if (res) {
         virReportError(VIR_ERR_INTERNAL_ERROR,
@@ -1911,6 +1971,7 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
                        _("Failed to destroy domain '%d'"), vm->def->id);
         goto endjob;
     }
+
 
     vm->hasManagedSave = true;
     ret = 0;
