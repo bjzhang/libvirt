@@ -449,8 +449,6 @@ libxlCreateDomEvents(virDomainObjPtr vm)
 {
     libxlDomainObjPrivatePtr priv = vm->privateData;
 
-    libxl_event_register_callbacks(priv->ctx, &ev_hooks, vm);
-
     if (libxl_evenable_domain_death(priv->ctx, vm->def->id, 0, &priv->deathW))
         goto error;
 
@@ -1231,6 +1229,7 @@ libxlDomainCreateXML(virConnectPtr conn, const char *xml,
     virDomainObjPtr vm = NULL;
     virDomainPtr dom = NULL;
     libxlDriverConfigPtr cfg = libxlDriverConfigGet(driver);
+    libxlDomainObjPrivatePtr priv;
 
     virCheckFlags(VIR_DOMAIN_START_PAUSED, NULL);
 
@@ -1248,6 +1247,9 @@ libxlDomainCreateXML(virConnectPtr conn, const char *xml,
                                    NULL)))
         goto cleanup;
     def = NULL;
+
+    priv = vm->privateData;
+    libxl_event_register_callbacks(priv->ctx, &ev_hooks, vm);
 
     if (libxlVmStart(driver, vm, (flags & VIR_DOMAIN_START_PAUSED) != 0,
                      -1) < 0) {
