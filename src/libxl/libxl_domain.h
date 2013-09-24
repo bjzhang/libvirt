@@ -55,6 +55,55 @@ struct libxlDomainJobObj {
     int owner;                          /* Thread which set current job */
 };
 
+typedef struct _libxlDomainAo libxlDomainAo;
+typedef libxlDomainAo *libxlDomainAoPtr;
+struct _libxlDomainAo {
+    libxl_asyncop_how ao_how;
+    int ao_how_enable;
+    int ao_how_enable_cb;
+    int ao_complete;
+};
+
+typedef struct _libxlChildInfo libxlChildInfo;
+typedef libxlChildInfo *libxlChildInfoPtr;
+struct _libxlChildInfo {
+    pid_t pid;
+    int status;
+    int called;
+    int pending;
+};
+
+typedef struct _libxlChildrenObj libxlChildrenObj;
+typedef libxlChildrenObj *libxlChildrenObjPtr;
+struct libxlChildrenObj {
+//    virObjectLockable parent;
+
+    virHashTable *objs;
+    libxl_ctx *ctx;
+};
+
+per_sigchild_info child_info[MAX_CHILD];
+
+////TODO: dymanic malloc child info
+//#define MAX_CHILD 10
+//typedef _libxlPerSigchildInfo libxlPerSigchildInfo;
+//typedef libxlPerSigchildInfo *libxlPerSigchildInfoPtr;
+//struct _libxlPerSigchildInfo {
+//    pid_t pid;
+//    int status;
+//    int called;
+//    int pending;
+//};
+//
+//typedef _libxlSigchildInfo libxlSigchildInfo;
+//typedef libxlSigchildInfo libxlSigchildInfoPtr;
+//struct _libxlSigchildInfo {
+//    libxl_ctx *ctx;//TODO do i need this? how about get this by container_of
+//    int id;
+//    per_sigchild_info child[MAX_CHILD];
+//};
+//sigchild_info child_info;
+
 typedef struct _libxlDomainObjPrivate libxlDomainObjPrivate;
 typedef libxlDomainObjPrivate *libxlDomainObjPrivatePtr;
 struct _libxlDomainObjPrivate {
@@ -73,12 +122,14 @@ struct _libxlDomainObjPrivate {
     libxlEventHookInfoPtr timerRegistrations;
 
     struct libxlDomainJobObj job;
-};
 
+    libxlDomainAo ao;
+
+    libxlChildrenObj children;
+};
 
 extern virDomainXMLPrivateDataCallbacks libxlDomainXMLPrivateDataCallbacks;
 extern virDomainDefParserConfig libxlDomainDefParserConfig;
-
 
 int
 libxlDomainObjPrivateInitCtx(virDomainObjPtr vm);
@@ -96,5 +147,10 @@ bool
 libxlDomainObjEndJob(libxlDriverPrivatePtr driver,
                      virDomainObjPtr obj)
     ATTRIBUTE_RETURN_CHECK;
+
+void
+ao_how_init(libxlDomainObjPrivatePtr priv ATTRIBUTE_UNUSED, sigchild_info *info ATTRIBUTE_UNUSED);
+void
+ao_how_wait(libxlDriverPrivatePtr driver, virDomainObjPtr vm);
 
 #endif /* LIBXL_DOMAIN_H */

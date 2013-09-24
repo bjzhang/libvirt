@@ -81,122 +81,69 @@ struct _libxlEventHookInfo {
     int id;
 };
 
-#define MAX_CHILD 100
-typedef struct {
-    pid_t pid;
-    int status;
-    int called;
-    int pending;
-} per_sigchild_info;
 
-typedef struct {
-    libxl_ctx *ctx;
-    int id;
-    per_sigchild_info child[MAX_CHILD];
-} sigchild_info;
-sigchild_info child_info;
-
-libxl_asyncop_how ao_how;
-static int ao_how_enable = 0;
-static int ao_how_enable_cb = 0;
-static int ao_complete= 0;
-static struct sigaction sigchld_saved_action;
-
+static pid_t libxl_fork_replacement(void *user);
 static const libxl_childproc_hooks childproc_hooks = {
     .chldowner = libxl_sigchld_owner_mainloop,
     .fork_replacement = libxl_fork_replacement,
 };
 
 static virClassPtr libxlDomainObjPrivateClass;
+static virClassPtr libxlChildrenObjClass;
+
+libxl_asyncop_how ao_how;
+int ao_how_enable = 0;
+int ao_how_enable_cb = 0;
+int ao_complete = 0;
 
 static void
 libxlDomainObjPrivateDispose(void *obj);
 
-static void sigchld_handler(int signo)
-{
-    int status;
-    pid_t pid;
-    size_t i = 0;
-
-    if (signo != SIGCHLD) {
-        VIR_ERROR("%s: signo<%d> is not SIGCHLD", __FUNCTION__, signo);
-        return;
-    }
-retry:
-    pid = waitpid(-1, &status, WNOHANG);
-    if (pid == 0) {
-        VIR_INFO("%s: no child found", __FUNCTION__);
-        return;
-    }
-
-    if (pid == -1) {
-        if (errno == ECHILD) {
-            VIR_INFO("%s: ECHILD", __FUNCTION__);
-            return;
-        }
-        if (errno == EINTR) {
-            VIR_INFO("%s: EINTR: try again", __FUNCTION__);
-            goto retry;
-        }
-        VIR_ERROR("waitpid() failed. error: %d", errno);
-        return;
-    }
-    //handle child reap in mainloop. because i do not have(or should not have?) ctx here.
-    while(child_info.child[i].pid != pid) {
-        //TODO check overflow
-        i++;
-    }
-    child_info.child[i].pid = pid;
-    child_info.child[i].status = status;
-    child_info.child[i].pending = 1;
-    VIR_INFO("set child pid<%d> done. status<%d>", pid, status);
-}
-
-static void
-libxl_sigchld_register(void)
-{
-    struct sigaction ours;
-
-    memset(&ours,0,sizeof(ours));
-    ours.sa_handler = sigchld_handler;
-    sigemptyset(&ours.sa_mask);
-    ours.sa_flags = SA_NOCLDSTOP | SA_RESTART;
-    sigaction(SIGCHLD, &ours, &sigchld_saved_action);
-}
-
-static void
+void
 ao_how_init(libxlDomainObjPrivatePtr priv ATTRIBUTE_UNUSED, sigchild_info *info ATTRIBUTE_UNUSED)
 {
-    ao_complete = 0;
+    priv->ao.ao_complete = 0;
 }
 
-static void
-ao_how_wait(libxlDriverPrivatePtr driver, virDomainObjPtr vm)
+static libxlChildCheckPending(void *payload,
+                              const void *name ATTRIBUTE_UNUSED,
+                              void *opaque)
+{
+    libxlChildInfo child = payload;
+    int *pendingp = opaque;
+    int want = 0;
+    //TODO lock
+//    virObjectLock(obj);
+    if ( child.pending == *pendingp ) {
+        want = 1;
+    }
+    //TODO unlock
+//    virObjectUnlock(obj);
+}
+
+void
+ao_how_wait(libxlDriverPrivatePtr driver ATTRIBUTE_UNUSED, virDomainObjPtr vm)
 {
     VIR_INFO("Waiting for libxl event");
     size_t i;
+    int pending = 1;
+    libxlChildInfoPtr childp;
+    libxlDomainObjPrivatePtr priv = obj->privateData;
 
     while (1) {
         virObjectUnlock(vm);
-        libxlDriverUnlock(driver);
         sleep(1);
-        libxlDriverLock(driver);
         virObjectLock(vm);
-        if (ao_complete) {
+        if (priv->ao.ao_complete) {
             VIR_INFO("got ao_complete, exit");
             break;
         }
 
         i = 0;
-        while(child_info.child[i].pid != 0) {
-            if(child_info.child[i].pending) {
-                VIR_INFO("Process child reap: pid<%d>, status<%d>", child_info.child[i].pid, child_info.child[i].status);
-                libxl_childproc_reaped(child_info.ctx, child_info.child[i].pid, child_info.child[i].status);
-                child_info.child[i].pending = 0;
-            }
-
-            i++;
-        }
+        childp->virHashSearch(children->objs, libxlChildCheckPending, &pending);
+        VIR_INFO("Process child reap: pid<%d>, status<%d>", childp->pid, childp->status);
+        libxl_childproc_reaped(priv->ctx, childp->pid, childp->status);
+        childp.pending = 0;
     }
 }
 
@@ -204,25 +151,27 @@ static void
 ao_how_callback(libxl_ctx *ctx ATTRIBUTE_UNUSED, int rc ATTRIBUTE_UNUSED, void *for_callback ATTRIBUTE_UNUSED)
 {
     VIR_INFO("%s", __FUNCTION__);
-    ao_complete=1;
+    //ao_complete=1;
+    //TODO
+    //priv->ao.ao_complete = 1;
     return;
 }
 
 static pid_t
 libxl_fork_replacement(void *user)
 {
-    sigchild_info *info = user;
+    per_sigchild_info **child_info_p = user;
     pid_t pid;
     size_t i = 0;
 
     pid = fork();
     VIR_INFO("libxl_fork_replacement pid is %d", pid);
     if (pid > 0) {
-        while(info->child[i].pid != 0) {
+        while(child_info_p[i].pid != 0) {
             //TODO check overflow
             i++;
         }
-        info->child[i].pid = pid;
+        child_info_p[i].pid = pid;
     }
     return pid;
 }
@@ -250,6 +199,27 @@ libxlDomainObjEventHookInfoFree(void *obj)
     virObjectUnref(info->priv);
     VIR_FREE(info);
 }
+
+//static int
+//libxlChildrenObjOnceInit(void)
+//{
+//    if (!(libxlChildrenObjClass = virClassNew(virClassForObjectLockable(),
+//                                              "libxlChildrenObj",
+//                                              sizeof(libxlChildrenObj),
+//                                              libxlChildrenObjDispose)))
+//        return -1;
+//    return 0;
+//}
+//
+//VIR_ONCE_GLOBAL_INIT(libxlChildrenObj)
+//
+//static void
+//libxlChildrenObjDispose(void *obj)
+//{
+//    libxlChildrenObjPtr children = obj;
+//
+//    virHashFree(children->objs);
+//}
 
 static void
 libxlDomainObjFDEventCallback(int watch ATTRIBUTE_UNUSED,
@@ -713,9 +683,17 @@ libxlDomainObjPrivateInitCtx(virDomainObjPtr vm)
         if (ao_how_enable_cb)
             ao_how.callback = ao_how_callback;
 
-        child_info.ctx = priv->ctx;
-        libxl_childproc_setmode(priv->ctx, &childproc_hooks, &child_info);
-        libxl_sigchld_register();
+        priv->children.ctx = priv->ctx;
+        libxl_childproc_setmode(priv->ctx, &childproc_hooks, &priv->children);
+        {
+#define LIBXL_CHILD_STR_BUFLEN 65
+            childstr[LIBXL_CHILD_STR_BUFLEN];
+            snprintf(childstr, LIBXL_CHILD_STR_BUFLEN, "%lx", &priv->children);
+            childstr[VIR_UUID_STRING_BUFLEN-1] = '\0';
+            if (virHashAddEntry(libxlChildHashPtr, childstr, &priv->children) < 0)
+                //TODO: should do more?
+                goto cleanup;
+        }
     }
 
     ret = 0;
