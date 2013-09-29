@@ -114,6 +114,14 @@ struct _libxlDriverPrivate {
     virSysinfoDefPtr hostsysinfo;
 };
 
+typedef struct _libxlChildrenHash libxlChildrenHash;
+typedef libxlChildrenHash *libxlChildrenHashPtr;
+struct _libxlChildrenHash {
+    virObjectLockable parent;
+    virHashTable *objs;
+
+};
+
 typedef struct _libxlEventHookInfo libxlEventHookInfo;
 typedef libxlEventHookInfo *libxlEventHookInfoPtr;
 

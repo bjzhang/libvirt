@@ -34,7 +34,7 @@
 #include "virtime.h"
 
 #define VIR_FROM_THIS VIR_FROM_LIBXL
-
+#define LIBXL_CHILD_STR_BUFLEN 65
 
 VIR_ENUM_IMPL(libxlDomainJob, LIBXL_JOB_LAST,
               "none",
@@ -90,6 +90,7 @@ static const libxl_childproc_hooks childproc_hooks = {
 
 static virClassPtr libxlDomainObjPrivateClass;
 static virClassPtr libxlChildrenObjClass;
+static virClassPtr libxlChildInfoClass;
 
 libxl_asyncop_how ao_how;
 int ao_how_enable = 0;
@@ -100,35 +101,36 @@ static void
 libxlDomainObjPrivateDispose(void *obj);
 
 void
-ao_how_init(libxlDomainObjPrivatePtr priv ATTRIBUTE_UNUSED, sigchild_info *info ATTRIBUTE_UNUSED)
+ao_how_init(libxlDomainObjPrivatePtr priv ATTRIBUTE_UNUSED)
 {
     priv->ao.ao_complete = 0;
 }
 
-static libxlChildCheckPending(void *payload,
-                              const void *name ATTRIBUTE_UNUSED,
-                              void *opaque)
+static int libxlChildCheckPending(const void *payload,
+                                  const void *name ATTRIBUTE_UNUSED,
+                                  const void *opaque)
 {
-    libxlChildInfo child = payload;
-    int *pendingp = opaque;
+    const libxlChildInfo *childp = payload;
+    const int *pendingp = opaque;
     int want = 0;
     //TODO lock
 //    virObjectLock(obj);
-    if ( child.pending == *pendingp ) {
+    if ( childp->pending == *pendingp ) {
         want = 1;
     }
     //TODO unlock
 //    virObjectUnlock(obj);
+    return want;
 }
 
 void
 ao_how_wait(libxlDriverPrivatePtr driver ATTRIBUTE_UNUSED, virDomainObjPtr vm)
 {
     VIR_INFO("Waiting for libxl event");
-    size_t i;
     int pending = 1;
     libxlChildInfoPtr childp;
-    libxlDomainObjPrivatePtr priv = obj->privateData;
+    libxlDomainObjPrivatePtr priv = vm->privateData;
+    libxlChildrenObj *children = &priv->children;
 
     while (1) {
         virObjectUnlock(vm);
@@ -139,11 +141,14 @@ ao_how_wait(libxlDriverPrivatePtr driver ATTRIBUTE_UNUSED, virDomainObjPtr vm)
             break;
         }
 
-        i = 0;
-        childp->virHashSearch(children->objs, libxlChildCheckPending, &pending);
+        //there is no need to protect the child during libxl_childproc_reaped.
+        //because the job will deny the ao issue more then one at the same time.
+        virObjectLock(children);
+        childp = virHashSearch(children->objs, libxlChildCheckPending, &pending);
+        virObjectUnlock(children);
         VIR_INFO("Process child reap: pid<%d>, status<%d>", childp->pid, childp->status);
         libxl_childproc_reaped(priv->ctx, childp->pid, childp->status);
-        childp.pending = 0;
+        childp->pending = 0;
     }
 }
 
@@ -160,18 +165,24 @@ ao_how_callback(libxl_ctx *ctx ATTRIBUTE_UNUSED, int rc ATTRIBUTE_UNUSED, void *
 static pid_t
 libxl_fork_replacement(void *user)
 {
-    per_sigchild_info **child_info_p = user;
+    libxlChildrenObj *children = user;
+    libxlChildInfo *childp = NULL;
     pid_t pid;
-    size_t i = 0;
+    char pidstr[LIBXL_CHILD_STR_BUFLEN];
 
     pid = fork();
-    VIR_INFO("libxl_fork_replacement pid is %d", pid);
+    VIR_INFO("libxl_fork_replacement pid is %lx", (long unsigned int)pid);
     if (pid > 0) {
-        while(child_info_p[i].pid != 0) {
-            //TODO check overflow
-            i++;
-        }
-        child_info_p[i].pid = pid;
+        //how to handle this error?
+        if (!(childp = virObjectLockableNew(libxlChildInfoClass))) {}
+            //crash
+        snprintf(pidstr, LIBXL_CHILD_STR_BUFLEN, "%lx", (long unsigned int)pid);
+        pidstr[VIR_UUID_STRING_BUFLEN-1] = '\0';
+        childp->pid = pid;
+        virObjectLock(children);
+        if (virHashAddEntry(children->objs, pidstr, childp) < 0) {}
+            //crash
+        virObjectUnlock(children);
     }
     return pid;
 }
@@ -200,26 +211,26 @@ libxlDomainObjEventHookInfoFree(void *obj)
     VIR_FREE(info);
 }
 
-//static int
-//libxlChildrenObjOnceInit(void)
-//{
-//    if (!(libxlChildrenObjClass = virClassNew(virClassForObjectLockable(),
-//                                              "libxlChildrenObj",
-//                                              sizeof(libxlChildrenObj),
-//                                              libxlChildrenObjDispose)))
-//        return -1;
-//    return 0;
-//}
-//
-//VIR_ONCE_GLOBAL_INIT(libxlChildrenObj)
-//
-//static void
-//libxlChildrenObjDispose(void *obj)
-//{
-//    libxlChildrenObjPtr children = obj;
-//
-//    virHashFree(children->objs);
-//}
+static int
+libxlChildrenObjOnceInit(void)
+{
+    if (!(libxlChildrenObjClass = virClassNew(virClassForObjectLockable(),
+                                              "libxlChildrenObj",
+                                              sizeof(libxlChildrenObj),
+                                              libxlChildrenObjDispose)))
+        return -1;
+    return 0;
+}
+
+VIR_ONCE_GLOBAL_INIT(libxlChildrenObj)
+
+static void
+libxlChildrenObjDispose(void *obj)
+{
+    libxlChildrenObjPtr children = obj;
+
+    virHashFree(children->objs);
+}
 
 static void
 libxlDomainObjFDEventCallback(int watch ATTRIBUTE_UNUSED,
@@ -588,6 +599,7 @@ static void
 libxlDomainObjPrivateDispose(void *obj)
 {
     libxlDomainObjPrivatePtr priv = obj;
+    childstr[LIBXL_CHILD_STR_BUFLEN];
 
     if (priv->deathW)
         libxl_evdisable_domain_death(priv->ctx, priv->deathW);
@@ -599,6 +611,12 @@ libxlDomainObjPrivateDispose(void *obj)
     if (priv->logger_file)
         VIR_FORCE_FCLOSE(priv->logger_file);
 
+    virObjectUnref(priv->children);
+    snprintf(childstr, LIBXL_CHILD_STR_BUFLEN, "%lx", &priv->children);
+    childstr[VIR_UUID_STRING_BUFLEN-1] = '\0';
+    virObjectLock(children_hash);
+    virHashRemoveEntry(children_hash->objs, childstr);
+    virObjectUnlock(children_hash);
     libxl_ctx_free(priv->ctx);
 }
 
@@ -640,6 +658,31 @@ virDomainDefParserConfig libxlDomainDefParserConfig = {
     .macPrefix = { 0x00, 0x16, 0x3e },
     .devicesPostParseCallback = libxlDomainDeviceDefPostParse,
 };
+
+static int libxlChildInfoOnceInit(void)
+{
+    if (!(libxlChildInfoClass = virClassNew(virClassForObjectLockable(),
+                                              "libxlChildInfo",
+                                              sizeof(libxlChildInfo),
+                                              libxlChildInfoDispose)))
+        return -1;
+    return 0;
+}
+
+VIR_ONCE_GLOBAL_INIT(libxlChildInfo)
+
+//the hash table should freed when domain destroy(libxlDomainObjPrivateDispose).
+static void libxlChildInfoDispose(void *obj)
+{
+    return;
+}
+
+static void
+libxlChildInfoFree(void *payload, const void *name ATTRIBUTE_UNUSED)
+{
+    libxlChildInfo obj = payload;
+    virObjectUnref(obj);
+}
 
 int
 libxlDomainObjPrivateInitCtx(virDomainObjPtr vm)
@@ -686,12 +729,19 @@ libxlDomainObjPrivateInitCtx(virDomainObjPtr vm)
         priv->children.ctx = priv->ctx;
         libxl_childproc_setmode(priv->ctx, &childproc_hooks, &priv->children);
         {
-#define LIBXL_CHILD_STR_BUFLEN 65
             childstr[LIBXL_CHILD_STR_BUFLEN];
             snprintf(childstr, LIBXL_CHILD_STR_BUFLEN, "%lx", &priv->children);
             childstr[VIR_UUID_STRING_BUFLEN-1] = '\0';
-            if (virHashAddEntry(libxlChildHashPtr, childstr, &priv->children) < 0)
+            virObjectLock(children_hash);
+            if (virHashAddEntry(children_hash->objs, childstr, &priv->children) < 0) {
                 //TODO: should do more?
+                virObjectUnlock(children_hash);
+                goto cleanup;
+            }
+            virObjectUnlock(children_hash);
+            //prepare child hash
+            if(!(priv->children.objs = virHashCreate(50, libxlChildInfoFree)))
+                //TODO cleanup.
                 goto cleanup;
         }
     }

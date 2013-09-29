@@ -29,6 +29,7 @@
 # include "domain_conf.h"
 # include "libxl_conf.h"
 # include "virchrdev.h"
+# include "virobject.h"
 
 # define JOB_MASK(job)                  (1 << (job - 1))
 # define DEFAULT_JOB_MASK               \
@@ -55,18 +56,20 @@ struct libxlDomainJobObj {
     int owner;                          /* Thread which set current job */
 };
 
+int ao_how_enable;
+int ao_how_enable_cb;
+
 typedef struct _libxlDomainAo libxlDomainAo;
 typedef libxlDomainAo *libxlDomainAoPtr;
 struct _libxlDomainAo {
     libxl_asyncop_how ao_how;
-    int ao_how_enable;
-    int ao_how_enable_cb;
     int ao_complete;
 };
 
 typedef struct _libxlChildInfo libxlChildInfo;
 typedef libxlChildInfo *libxlChildInfoPtr;
 struct _libxlChildInfo {
+    virObjectLockable parent;
     pid_t pid;
     int status;
     int called;
@@ -75,14 +78,12 @@ struct _libxlChildInfo {
 
 typedef struct _libxlChildrenObj libxlChildrenObj;
 typedef libxlChildrenObj *libxlChildrenObjPtr;
-struct libxlChildrenObj {
-//    virObjectLockable parent;
+struct _libxlChildrenObj {
+    virObjectLockable parent;
 
     virHashTable *objs;
     libxl_ctx *ctx;
 };
-
-per_sigchild_info child_info[MAX_CHILD];
 
 ////TODO: dymanic malloc child info
 //#define MAX_CHILD 10
@@ -149,7 +150,7 @@ libxlDomainObjEndJob(libxlDriverPrivatePtr driver,
     ATTRIBUTE_RETURN_CHECK;
 
 void
-ao_how_init(libxlDomainObjPrivatePtr priv ATTRIBUTE_UNUSED, sigchild_info *info ATTRIBUTE_UNUSED);
+ao_how_init(libxlDomainObjPrivatePtr priv ATTRIBUTE_UNUSED);
 void
 ao_how_wait(libxlDriverPrivatePtr driver, virDomainObjPtr vm);
 
