@@ -70,7 +70,7 @@
 
 
 static libxlDriverPrivatePtr libxl_driver = NULL;
-static libxlChildrenHashPtr children_hash = NULL;
+libxlChildrenHashPtr children_hash = NULL;
 
 static struct sigaction sigchld_saved_action;
 

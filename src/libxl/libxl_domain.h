@@ -132,6 +132,8 @@ struct _libxlDomainObjPrivate {
 extern virDomainXMLPrivateDataCallbacks libxlDomainXMLPrivateDataCallbacks;
 extern virDomainDefParserConfig libxlDomainDefParserConfig;
 
+extern libxlChildrenHashPtr children_hash;
+
 int
 libxlDomainObjPrivateInitCtx(virDomainObjPtr vm);
 

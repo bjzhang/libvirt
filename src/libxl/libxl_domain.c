@@ -211,6 +211,9 @@ libxlDomainObjEventHookInfoFree(void *obj)
     VIR_FREE(info);
 }
 
+static void
+libxlChildrenObjDispose(void *obj);
+
 static int
 libxlChildrenObjOnceInit(void)
 {
@@ -599,7 +602,7 @@ static void
 libxlDomainObjPrivateDispose(void *obj)
 {
     libxlDomainObjPrivatePtr priv = obj;
-    childstr[LIBXL_CHILD_STR_BUFLEN];
+    char childstr[LIBXL_CHILD_STR_BUFLEN];
 
     if (priv->deathW)
         libxl_evdisable_domain_death(priv->ctx, priv->deathW);
@@ -611,8 +614,8 @@ libxlDomainObjPrivateDispose(void *obj)
     if (priv->logger_file)
         VIR_FORCE_FCLOSE(priv->logger_file);
 
-    virObjectUnref(priv->children);
-    snprintf(childstr, LIBXL_CHILD_STR_BUFLEN, "%lx", &priv->children);
+    virObjectUnref(&priv->children);
+    snprintf(childstr, LIBXL_CHILD_STR_BUFLEN, "%lx", (unsigned long int)&priv->children);
     childstr[VIR_UUID_STRING_BUFLEN-1] = '\0';
     virObjectLock(children_hash);
     virHashRemoveEntry(children_hash->objs, childstr);
@@ -659,6 +662,12 @@ virDomainDefParserConfig libxlDomainDefParserConfig = {
     .devicesPostParseCallback = libxlDomainDeviceDefPostParse,
 };
 
+//the hash table should freed when domain destroy(libxlDomainObjPrivateDispose).
+static void libxlChildInfoDispose(void *obj ATTRIBUTE_UNUSED)
+{
+    return;
+}
+
 static int libxlChildInfoOnceInit(void)
 {
     if (!(libxlChildInfoClass = virClassNew(virClassForObjectLockable(),
@@ -671,16 +680,10 @@ static int libxlChildInfoOnceInit(void)
 
 VIR_ONCE_GLOBAL_INIT(libxlChildInfo)
 
-//the hash table should freed when domain destroy(libxlDomainObjPrivateDispose).
-static void libxlChildInfoDispose(void *obj)
-{
-    return;
-}
-
 static void
 libxlChildInfoFree(void *payload, const void *name ATTRIBUTE_UNUSED)
 {
-    libxlChildInfo obj = payload;
+    libxlChildInfoPtr obj = payload;
     virObjectUnref(obj);
 }
 
@@ -729,8 +732,8 @@ libxlDomainObjPrivateInitCtx(virDomainObjPtr vm)
         priv->children.ctx = priv->ctx;
         libxl_childproc_setmode(priv->ctx, &childproc_hooks, &priv->children);
         {
-            childstr[LIBXL_CHILD_STR_BUFLEN];
-            snprintf(childstr, LIBXL_CHILD_STR_BUFLEN, "%lx", &priv->children);
+            char childstr[LIBXL_CHILD_STR_BUFLEN];
+            snprintf(childstr, LIBXL_CHILD_STR_BUFLEN, "%lx", (unsigned long int)&priv->children);
             childstr[VIR_UUID_STRING_BUFLEN-1] = '\0';
             virObjectLock(children_hash);
             if (virHashAddEntry(children_hash->objs, childstr, &priv->children) < 0) {
