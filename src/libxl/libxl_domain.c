@@ -573,6 +573,30 @@ libxlDomainObjEndJob(libxlDriverPrivatePtr driver ATTRIBUTE_UNUSED,
     return virObjectUnref(obj);
 }
 
+//the hash table should freed when domain destroy(libxlDomainObjPrivateDispose).
+static void libxlChildInfoDispose(void *obj ATTRIBUTE_UNUSED)
+{
+    return;
+}
+
+static int libxlChildInfoOnceInit(void)
+{
+    if (!(libxlChildInfoClass = virClassNew(virClassForObjectLockable(),
+                                              "libxlChildInfo",
+                                              sizeof(libxlChildInfo),
+                                              libxlChildInfoDispose)))
+        return -1;
+    return 0;
+}
+
+VIR_ONCE_GLOBAL_INIT(libxlChildInfo)
+
+static void
+libxlChildInfoFree(void *payload, const void *name ATTRIBUTE_UNUSED)
+{
+    libxlChildInfoPtr obj = payload;
+    virObjectUnref(obj);
+}
 static void *
 libxlDomainObjPrivateAlloc(void)
 {
@@ -594,6 +618,14 @@ libxlDomainObjPrivateAlloc(void)
         virObjectUnref(priv);
         return NULL;
     }
+
+    if (libxlChildrenObjInitialize() < 0)
+        //\TODO error handle
+        return NULL;
+
+    if (libxlChildInfoInitialize() < 0)
+        //\TODO error handle
+        return NULL;
 
     return priv;
 }
@@ -661,31 +693,6 @@ virDomainDefParserConfig libxlDomainDefParserConfig = {
     .macPrefix = { 0x00, 0x16, 0x3e },
     .devicesPostParseCallback = libxlDomainDeviceDefPostParse,
 };
-
-//the hash table should freed when domain destroy(libxlDomainObjPrivateDispose).
-static void libxlChildInfoDispose(void *obj ATTRIBUTE_UNUSED)
-{
-    return;
-}
-
-static int libxlChildInfoOnceInit(void)
-{
-    if (!(libxlChildInfoClass = virClassNew(virClassForObjectLockable(),
-                                              "libxlChildInfo",
-                                              sizeof(libxlChildInfo),
-                                              libxlChildInfoDispose)))
-        return -1;
-    return 0;
-}
-
-VIR_ONCE_GLOBAL_INIT(libxlChildInfo)
-
-static void
-libxlChildInfoFree(void *payload, const void *name ATTRIBUTE_UNUSED)
-{
-    libxlChildInfoPtr obj = payload;
-    virObjectUnref(obj);
-}
 
 int
 libxlDomainObjPrivateInitCtx(virDomainObjPtr vm)

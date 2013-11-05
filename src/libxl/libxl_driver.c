@@ -74,6 +74,8 @@ libxlChildrenHashPtr children_hash = NULL;
 
 static struct sigaction sigchld_saved_action;
 
+static virClassPtr libxlChildrenHashClass;
+
 /* Function declarations */
 static int
 libxlDomainManagedSaveLoad(virDomainObjPtr vm,
@@ -84,10 +86,18 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
              bool start_paused, int restore_fd);
 
 /* Function definitions */
+//when libxlChildrenHash being free, the obj in this hash table is already
+//freed. it is free when driver close
+static void
+libxlChildrenHashDispose(void *obj ATTRIBUTE_UNUSED)
+{
+    return;
+}
+
 static int
 libxlChildrenHashOnceInit(void)
 {
-    if (!(libxlChildrenHashClass = virClassNew(virClassForObjectlockable(),
+    if (!(libxlChildrenHashClass = virClassNew(virClassForObjectLockable(),
                                                "libxlChildrenHash",
                                                sizeof(libxlChildrenHash),
                                                libxlChildrenHashDispose)))
@@ -97,21 +107,13 @@ libxlChildrenHashOnceInit(void)
 
 VIR_ONCE_GLOBAL_INIT(libxlChildrenHash)
 
-//when libxlChildrenHash being free, the obj in this hash table is already
-//freed. it is free when driver close
-static void
-libxlChildrenHashDispose(void *obj)
-{
-    return 0;
-}
-
 static int
-libxlChildCheckPid(void *payload,
+libxlChildCheckPid(const void *payload,
                    const void *name ATTRIBUTE_UNUSED,
-                   void *opaque)
+                   const void *opaque)
 {
-    libxlChildInfo *childp = payload;
-    libxlChildInfo *target = opaque;
+    libxlChildInfo *childp = (libxlChildInfo*)payload;
+    libxlChildInfo *target = (libxlChildInfo*)opaque;
     int want = 0;
     virObjectLock(childp);
     if ( childp->pid == target->pid ) {
@@ -124,12 +126,12 @@ libxlChildCheckPid(void *payload,
 }
 
 static int
-libxlChildrenCheckPid(void *payload,
+libxlChildrenCheckPid(const void *payload,
                       const void *name ATTRIBUTE_UNUSED,
-                      void *opaque)
+                      const void *opaque)
 {
-    libxlChildrenObj children = payload;
-    libxlChildInfo *childp = opaque;
+    libxlChildrenObjPtr children = (libxlChildrenObjPtr)payload;
+    libxlChildInfo *childp = (libxlChildInfo*)opaque;
     int want = 0;
     virObjectLock(children);
     if (virHashSearch(children->objs, libxlChildCheckPid, childp)) {
@@ -138,6 +140,7 @@ libxlChildrenCheckPid(void *payload,
         return want;
     }
     virObjectUnlock(children);
+    return want;
 }
 
 static void
@@ -174,7 +177,7 @@ retry:
     child.pid = pid;
     child.status = status;
     virObjectLock(children_hash);
-    virHashSearch(children_hash, libxlChildrenCheckPid, &child);
+    virHashSearch(children_hash->objs, libxlChildrenCheckPid, &child);
     virObjectUnlock(children_hash);
 
     VIR_INFO("set child pid<%d> done. status<%d>", pid, status);
@@ -443,7 +446,7 @@ libxlVmReap(libxlDriverPrivatePtr driver,
 
     if (ao_how_enable) {
         ao_how_init(priv);
-        ao_how_p = &priv->ao;
+        ao_how_p = &priv->ao.ao_how;
     }
 
     if (libxl_domain_destroy(priv->ctx, vm->def->id, ao_how_p) < 0) {
@@ -682,7 +685,6 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     int managed_save_fd = -1;
     libxlDomainObjPrivatePtr priv = vm->privateData;
     libxlDriverConfigPtr cfg = libxlDriverConfigGet(driver);
-    sigchild_info info;
     libxl_asyncop_how *ao_how_p = NULL;
 
     if (libxlDomainObjPrivateInitCtx(vm) < 0)
@@ -756,7 +758,7 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
 
     if (ao_how_enable) {
         ao_how_init(priv);
-        ao_how_p = &priv->ao;
+        ao_how_p = &priv->ao.ao_how;
     }
 
     virObjectUnlock(vm);
@@ -765,7 +767,7 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
                                       &domid, ao_how_p, NULL);
     else
         res = libxl_domain_create_restore(priv->ctx, &d_config, &domid,
-                                          restore_fd, ao_how_p, NULL);
+                                          restore_fd, 0, ao_how_p, NULL);
     virObjectLock(vm);
 
     if (ao_how_enable) {
@@ -1104,6 +1106,9 @@ libxlStateInitialize(bool privileged,
         VIR_INFO("do not use ao_how");
         ao_how_enable = 0;
     }
+
+    //\TODO error handle
+    libxlChildrenHashInitialize();
 
     if (ao_how_enable) {
         libxl_sigchld_register();
@@ -2022,7 +2027,6 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
     int fd = -1;
     int ret = -1;
     int res;
-    sigchild_info info;
     libxl_asyncop_how *ao_how_p = NULL;
 
     if (libxlDomainObjBeginJob(driver, vm, LIBXL_JOB_MODIFY) < 0) {
@@ -2072,7 +2076,7 @@ libxlDoDomainSave(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
      */
     if (ao_how_enable) {
         ao_how_init(priv);
-        ao_how_p = &priv->ao;
+        ao_how_p = &priv->ao.ao_how;
     }
 
     virObjectUnlock(vm);
