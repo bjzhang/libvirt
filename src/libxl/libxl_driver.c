@@ -767,7 +767,7 @@ libxlVmStart(libxlDriverPrivatePtr driver, virDomainObjPtr vm,
                                       &domid, ao_how_p, NULL);
     else
         res = libxl_domain_create_restore(priv->ctx, &d_config, &domid,
-                                          restore_fd, 0, ao_how_p, NULL);
+                                          restore_fd, ao_how_p, NULL);
     virObjectLock(vm);
 
     if (ao_how_enable) {
